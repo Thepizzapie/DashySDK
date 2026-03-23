@@ -31,6 +31,7 @@ export { reportMiddleware } from "./server/middleware.js";
 export { extractSentinelKeys } from "./hydrate.js";
 export { prepareDoc } from "./frame/prepareDoc.js";
 export { redactPiiColumns } from "./connectors/utils.js";
+export { SDKValidationError, SDKTimeoutError, SDKLLMError, SDKConnectorError } from "./errors.js";
 
 export interface DeployOptions {
   /** Re-query interval in seconds (default: 300 = 5 min) */
