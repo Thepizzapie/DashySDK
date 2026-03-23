@@ -145,23 +145,23 @@ setInterval(async () => {
 
 ## `generate` vs `stream`
 
-Both are a **single LLM call** with the same source and options. The only difference is how you consume the tokens:
+They work differently under the hood:
 
-- **`generate`** collects all tokens internally and resolves with the complete `Dashboard` once done
-- **`stream`** yields each token delta as it arrives, then yields a final `done` chunk with the `Dashboard`
+- **`generate`** runs a **multi-step pipeline** — planner → visualizer → inspector/critic → refiner. Higher quality output, multiple LLM calls, slower.
+- **`stream`** is a **single LLM call** that streams tokens directly as they arrive, then yields a final `done` with the complete `Dashboard`. Faster, no refinement pass.
 
 ```ts
-// generate — resolves when the full HTML is ready
+// generate — multi-step pipeline, resolves with final Dashboard
 const dashboard = await sdk.generate(source, options);
 
-// stream — yields deltas as tokens arrive, then done
+// stream — single LLM call, yields token deltas then done
 for await (const chunk of sdk.stream(source, options)) {
-  if (chunk.type === "delta") process.stdout.write(chunk.text);
+  if (chunk.type === "delta") process.stdout.write(chunk.text); // live preview
   if (chunk.type === "done") console.log(chunk.dashboard.title);
 }
 ```
 
-Use `stream` when you want to show a live preview while the AI writes. Use `generate` when you just need the result.
+Use `generate` when output quality matters. Use `stream` when you want live preview or faster results.
 
 ---
 

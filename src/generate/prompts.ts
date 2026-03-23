@@ -355,7 +355,7 @@ OUTPUT FORMAT: Raw HTML document only. No markdown fences. No prose. No explanat
 3. Make the dashboard visually complete, asymmetrical (Bento style), and highly polished.
 4. Every generation must include at least one interactive element (tabs, filters, or search).
 5. CRITICAL: Check all closing tags match.
-6. STRICT LENGTH LIMIT: Your entire output MUST fit within 12,000 tokens. Write ONE focused component. Do NOT build multiple large sub-components or deep nested tables. If the prompt requests many sections, pick the 2-3 most important ones. A truncated dashboard is broken — it is better to output less and finish cleanly.
+6. LENGTH — HARD LIMIT: Output at most 350 lines of JSX. One root component only. Max 2 tabs or sections. No more than 5 table columns. No deeply nested sub-components. Pick the 2 most important things from the prompt and do those well. A cut-off dashboard is completely broken — finishing cleanly is more important than covering every feature.
 
 ## Live data pattern (REQUIRED for all data arrays)
 Every data array MUST use this pattern so live data can be injected without a page reload:
