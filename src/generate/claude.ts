@@ -38,7 +38,7 @@ export async function* generateReportStreamAnthropic(
 
   const stream = client.messages.stream({
     model: claudeModel,
-    max_tokens: 16000,
+    max_tokens: 32000,
     system: systemPrompt,
     messages: [{ role: "user", content: userPrompt }],
   });
