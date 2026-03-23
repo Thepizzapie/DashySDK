@@ -143,31 +143,49 @@ setInterval(async () => {
 
 ---
 
+## `generate` vs `stream`
+
+Both methods connect to your database, run the AI, and return the same `Dashboard` object. The difference is when you get it:
+
+| | `generate` | `stream` |
+|---|---|---|
+| Returns | `Promise<Dashboard>` | `AsyncGenerator` |
+| When you get the result | After full generation completes | Incrementally as the AI writes |
+| Use when | Server-side, scripts, caching | Live preview UI, showing progress to the user |
+
+**`generate` — wait for the full result:**
+```ts
+// Blocks until the entire dashboard HTML is ready (~10–30s depending on complexity)
+const dashboard = await sdk.generate(source, options);
+console.log(dashboard.html_content); // complete HTML
+```
+
+**`stream` — get tokens as they arrive:**
+```ts
+// Yields { type: "delta", text: string } chunks as the AI writes,
+// then a final { type: "done", dashboard: Dashboard } when complete.
+for await (const chunk of sdk.stream(source, options)) {
+  if (chunk.type === "delta") {
+    process.stdout.write(chunk.text); // partial HTML, good for live preview
+  }
+  if (chunk.type === "done") {
+    const dashboard = chunk.dashboard; // full Dashboard object
+    writeFileSync("dashboard.html", dashboard.html_content);
+  }
+}
+```
+
+Both accept the same `source` and `options` arguments.
+
+---
+
 ## Generation Modes
 
 | Mode | Stack | Style | Best for |
 |------|-------|-------|----------|
 | `charts` | Recharts + MUI | Dark, glassmorphic | Analytics, KPI dashboards |
 | `mui` | MUI components | Dark, structured | Data overviews, admin panels |
-| `diagram` | D3 + hand-crafted SVG | Academic, white bg | Methodology flows, statistical figures |
-
----
-
-## Streaming Generation
-
-For faster feedback (e.g. showing a live preview while the AI writes):
-
-```ts
-for await (const chunk of sdk.stream(source, options)) {
-  if (chunk.type === "delta") {
-    process.stdout.write(chunk.text); // partial HTML as it streams
-  }
-  if (chunk.type === "done") {
-    const dashboard = chunk.dashboard;
-    writeFileSync("dashboard.html", dashboard.html_content);
-  }
-}
-```
+| `diagram` *(experimental)* | D3 + hand-crafted SVG | Academic, white bg | Methodology flows, statistical figures |
 
 ---
 
