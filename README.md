@@ -298,6 +298,7 @@ console.log("Live at:", `${process.env.DASHY_BASE_URL}/dashboard/${dashboard.id}
 | `openaiKey` | `string` | — | Required if provider is `"openai"` |
 | `anthropicKey` | `string` | — | Required if provider is `"anthropic"` |
 | `store` | `DashboardStore` | — | Optional persistence (Dashy, memory, etc.) |
+| `logger` | `Logger` | stderr JSON | Custom logger — see Logging section |
 
 ---
 
@@ -352,6 +353,132 @@ Makes raw generated HTML safe for iframe embedding. Injects the DASHY bootstrap 
 ### `extractSentinelKeys(html)` → `string[]`
 
 Returns entity key names used in a dashboard. Use these as the `data` keys when calling postMessage.
+
+---
+
+---
+
+## Production Middleware Setup
+
+Use `reportMiddleware` to expose dashboards via Express with rate limiting, auth, and health checks:
+
+```ts
+import express from "express";
+import { createSDK, reportMiddleware, MemoryDashboardStore } from "@dashy/sdk";
+
+const app = express();
+const store = new MemoryDashboardStore();
+
+app.use("/dashboards", reportMiddleware({
+  store,
+
+  // Optional: reject requests without a valid token
+  auth: (req) => req.headers["x-api-key"] === process.env.DASHBOARD_KEY,
+
+  // Optional: rate limit — 10 requests per hour per IP
+  rateLimit: {
+    windowMs: 3_600_000,
+    maxRequests: 10,
+  },
+}));
+
+app.listen(3000);
+```
+
+**Built-in routes:**
+
+| Route | Auth? | Rate limited? | Description |
+|-------|-------|---------------|-------------|
+| `GET /dashboards/health` | No | No | Liveness probe: `{ status, version, uptimeMs }` |
+| `GET /dashboards` | Yes | Yes | List all dashboards (JSON) |
+| `GET /dashboards/:id` | Yes | Yes | Serve dashboard HTML (ETag cached) |
+| `GET /dashboards/:id/meta` | Yes | Yes | Dashboard metadata (JSON) |
+
+**Graceful shutdown:**
+
+```ts
+import { shutdown } from "@dashy/sdk";
+
+process.on("SIGTERM", async () => {
+  await shutdown(); // drains in-flight requests, closes DB pools
+  process.exit(0);
+});
+```
+
+---
+
+## Logging & Observability
+
+By default the SDK logs JSON lines to `stderr`. Inject your own logger to route output to your logging infrastructure:
+
+```ts
+import { createSDK } from "@dashy/sdk";
+import type { Logger } from "@dashy/sdk";
+
+// Example: route to pino or winston
+const myLogger: Logger = {
+  log(level, msg, meta) {
+    myPino[level]({ ...meta }, msg);
+  },
+};
+
+const sdk = createSDK({
+  provider: "openai",
+  openaiKey: process.env.OPENAI_API_KEY,
+  logger: myLogger,
+});
+```
+
+**Suppressing logs in tests:**
+
+```ts
+import { noopLogger } from "@dashy/sdk";
+const sdk = createSDK({ provider: "anthropic", anthropicKey: "...", logger: noopLogger });
+```
+
+Each successful `generate()` call emits an `info` event with:
+
+```json
+{ "event": "generate", "mode": "charts", "durationMs": 4200 }
+```
+
+---
+
+## Error Handling
+
+All SDK errors are typed. Catch them specifically:
+
+```ts
+import {
+  SDKValidationError,
+  SDKTimeoutError,
+  SDKLLMError,
+  SDKConnectorError,
+} from "@dashy/sdk";
+
+try {
+  const dashboard = await sdk.generate(source, options);
+} catch (err) {
+  if (err instanceof SDKValidationError) {
+    console.error("Bad input:", err.message, "field:", err.field);
+  } else if (err instanceof SDKTimeoutError) {
+    console.error("LLM timed out at step:", err.step);
+  } else if (err instanceof SDKLLMError) {
+    console.error("LLM API error:", err.message, "provider:", err.provider, "status:", err.statusCode);
+  } else if (err instanceof SDKConnectorError) {
+    console.error("DB connection error:", err.message, "source:", err.sourceType);
+  }
+}
+```
+
+| Error class | When thrown | Extra properties |
+|-------------|-------------|------------------|
+| `SDKValidationError` | Bad `prompt`, `mode`, `dataLimit`, etc. | `field?: string` |
+| `SDKTimeoutError` | LLM call exceeded 60s | `step: string` |
+| `SDKLLMError` | LLM API error or exhausted retries | `provider`, `statusCode?` |
+| `SDKConnectorError` | DB connection / SSRF blocked | `sourceType: string` |
+
+LLM calls automatically retry up to 3 times (exponential backoff) on transient errors (network failures, 429 rate limits, 503s). Non-retryable errors (400, 401) surface immediately.
 
 ---
 
