@@ -1,3 +1,5 @@
+import type { Logger } from "./logger.js";
+
 // ── Core data types ────────────────────────────────────────────────────────────
 
 export type ScalarType = "string" | "number" | "boolean" | "date" | "datetime" | "json" | "unknown";
@@ -162,6 +164,8 @@ export interface SDKConfig {
   model?: string;
   /** Optional store for saving generated dashboards */
   store?: DashboardStore;
+  /** Custom logger (default: JSON lines to stderr). Pass noopLogger to silence. */
+  logger?: Logger;
 }
 
 // ── Connector interface ────────────────────────────────────────────────────────
@@ -173,3 +177,5 @@ export interface Connector {
   /** Run an arbitrary query and return rows */
   query(q: string, params?: unknown[]): Promise<Row[]>;
 }
+
+export type { Logger, LogLevel } from "./logger.js";

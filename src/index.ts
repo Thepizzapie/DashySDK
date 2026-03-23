@@ -2,6 +2,7 @@ import { createConnector } from "./connectors/index.js";
 import { generateReport, generateReportStream } from "./generate/index.js";
 import { MemoryDashboardStore } from "./publish/index.js";
 import { redactPiiColumns } from "./connectors/utils.js";
+import { SDKValidationError } from "./errors.js";
 import type {
   SDKConfig,
   LLMProvider,
@@ -32,6 +33,28 @@ export { extractSentinelKeys } from "./hydrate.js";
 export { prepareDoc } from "./frame/prepareDoc.js";
 export { redactPiiColumns } from "./connectors/utils.js";
 export { SDKValidationError, SDKTimeoutError, SDKLLMError, SDKConnectorError } from "./errors.js";
+export { defaultLogger, noopLogger } from "./logger.js";
+export type { Logger, LogLevel } from "./logger.js";
+export { shutdown, onShutdown } from "./server/middleware.js";
+
+function validateOptions(options: ReportOptions): void {
+  if (!options.prompt || typeof options.prompt !== "string") {
+    throw new SDKValidationError("prompt is required and must be a string", "prompt");
+  }
+  if (options.prompt.length > 5000) {
+    throw new SDKValidationError("prompt must be 5000 characters or fewer", "prompt");
+  }
+  const validModes = ["html", "mui", "charts", "infographic", "diagram"];
+  if (options.mode && !validModes.includes(options.mode)) {
+    throw new SDKValidationError(`mode must be one of: ${validModes.join(", ")}`, "mode");
+  }
+  if (options.dataLimit !== undefined && (options.dataLimit < 1 || options.dataLimit > 5000)) {
+    throw new SDKValidationError("dataLimit must be between 1 and 5000", "dataLimit");
+  }
+  if (options.entities !== undefined && !Array.isArray(options.entities)) {
+    throw new SDKValidationError("entities must be an array of strings", "entities");
+  }
+}
 
 export interface DeployOptions {
   /** Re-query interval in seconds (default: 300 = 5 min) */
@@ -85,12 +108,23 @@ export class ReportSDK {
     source: DataSourceConfig,
     options: ReportOptions
   ): Promise<Dashboard> {
+    validateOptions(options);
     const connector = createConnector(source);
     await connector.connect();
     try {
+      const _t0 = Date.now();
       const model = await connector.introspect();
       const queryData = await this.fetchQueryData(connector, model, options);
-      return await generateReport(model, options, this.config, queryData);
+      const dashboard = await generateReport(model, options, this.config, queryData);
+      const logger = this.config.logger;
+      if (logger) {
+        logger.log("info", "dashboard generated", {
+          event: "generate",
+          mode: options.mode ?? "charts",
+          durationMs: Date.now() - _t0,
+        });
+      }
+      return dashboard;
     } finally {
       await connector.disconnect();
     }
@@ -121,6 +155,7 @@ export class ReportSDK {
     source: DataSourceConfig,
     options: ReportOptions
   ): AsyncGenerator<{ type: "delta"; text: string } | { type: "done"; dashboard: Dashboard }> {
+    validateOptions(options);
     const connector = createConnector(source);
     await connector.connect();
     try {

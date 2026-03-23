@@ -1,12 +1,86 @@
+import { createHash } from "crypto";
 import type { Request, Response, NextFunction, RequestHandler } from "express";
 import type { Dashboard, DashboardStore } from "../types.js";
+
+// ── Rate limiter ───────────────────────────────────────────────────────────────
+
+interface RateLimitConfig {
+  /** Time window in ms (default: 3_600_000 = 1 hour) */
+  windowMs?: number;
+  /** Max requests per window (default: 60) */
+  maxRequests?: number;
+  /** Key function — defaults to IP address */
+  keyFn?: (req: Request) => string;
+}
+
+interface RateLimitEntry {
+  count: number;
+  resetAt: number;
+}
+
+function createRateLimiter(config: RateLimitConfig = {}) {
+  const windowMs = config.windowMs ?? 3_600_000;
+  const maxRequests = config.maxRequests ?? 60;
+  const keyFn = config.keyFn ?? ((req: Request) =>
+    (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() ?? req.socket?.remoteAddress ?? "unknown"
+  );
+  const store = new Map<string, RateLimitEntry>();
+
+  return function rateLimitMiddleware(req: Request, res: Response): boolean {
+    const key = keyFn(req);
+    const now = Date.now();
+    const entry = store.get(key);
+
+    if (!entry || entry.resetAt <= now) {
+      store.set(key, { count: 1, resetAt: now + windowMs });
+      return true; // allowed
+    }
+
+    if (entry.count >= maxRequests) {
+      const retryAfter = Math.ceil((entry.resetAt - now) / 1000);
+      res.setHeader("Retry-After", retryAfter);
+      res.setHeader("X-RateLimit-Limit", maxRequests);
+      res.setHeader("X-RateLimit-Remaining", 0);
+      res.status(429).json({ error: "Too many requests", retryAfter });
+      return false; // blocked
+    }
+
+    entry.count++;
+    res.setHeader("X-RateLimit-Limit", maxRequests);
+    res.setHeader("X-RateLimit-Remaining", maxRequests - entry.count);
+    return true; // allowed
+  };
+}
+
+// ── Middleware options ─────────────────────────────────────────────────────────
 
 export interface ReportMiddlewareOptions {
   store: DashboardStore;
   /** Path prefix (default: "/dashboards") */
   path?: string;
   auth?: (req: Request) => boolean | Promise<boolean>;
+  /** Optional rate limiting for list/serve routes */
+  rateLimit?: RateLimitConfig;
 }
+
+// ── Shutdown registry ─────────────────────────────────────────────────────────
+
+const _shutdownCallbacks: Array<() => Promise<void>> = [];
+
+/** Register a cleanup function to be called on shutdown() */
+export function onShutdown(fn: () => Promise<void>): void {
+  _shutdownCallbacks.push(fn);
+}
+
+/** Drain in-flight requests and run all registered cleanup functions. */
+export async function shutdown(): Promise<void> {
+  await Promise.all(_shutdownCallbacks.map(fn => fn().catch(() => {})));
+}
+
+// ── SDK version ───────────────────────────────────────────────────────────────
+
+const SDK_VERSION = "0.1.0"; // keep in sync with package.json
+const START_TIME = Date.now();
 
 /**
  * Express middleware that serves saved dashboards.
@@ -15,14 +89,25 @@ export interface ReportMiddlewareOptions {
  *   app.use("/dashboards", reportMiddleware({ store }))
  *
  * Routes served:
- *   GET /dashboards/:id        — serve dashboard HTML
- *   GET /dashboards/:id/meta   — return dashboard metadata as JSON
- *   GET /dashboards            — list all dashboards (JSON)
+ *   GET /health              — liveness probe (no auth required)
+ *   GET /dashboards/:id      — serve dashboard HTML
+ *   GET /dashboards/:id/meta — return dashboard metadata as JSON
+ *   GET /dashboards          — list all dashboards (JSON)
  */
 export function reportMiddleware(opts: ReportMiddlewareOptions): RequestHandler {
   const { store } = opts;
+  const checkRateLimit = opts.rateLimit ? createRateLimiter(opts.rateLimit) : null;
 
   return async (req: Request, res: Response, next: NextFunction) => {
+    const url = req.path;
+
+    // Health check — no auth, no rate limit
+    if (url === "/health") {
+      res.json({ status: "ok", version: SDK_VERSION, uptimeMs: Date.now() - START_TIME });
+      return;
+    }
+
+    // Auth check
     if (opts.auth) {
       const allowed = await opts.auth(req);
       if (!allowed) {
@@ -31,7 +116,11 @@ export function reportMiddleware(opts: ReportMiddlewareOptions): RequestHandler 
       }
     }
 
-    const url = req.path;
+    // Rate limiting
+    if (checkRateLimit) {
+      const allowed = checkRateLimit(req, res);
+      if (!allowed) return;
+    }
 
     // List dashboards
     if (url === "/" || url === "") {
@@ -68,10 +157,19 @@ export function reportMiddleware(opts: ReportMiddlewareOptions): RequestHandler 
       return;
     }
 
+    // ETag caching
+    const etag = `"${createHash("md5").update(dashboard.html_content).digest("hex")}"`;
+    res.setHeader("ETag", etag);
+    if (req.headers["if-none-match"] === etag) {
+      res.status(304).end();
+      return;
+    }
+
     // Serve HTML
     res.setHeader("Content-Type", "text/html; charset=utf-8");
     res.setHeader("X-Content-Type-Options", "nosniff");
-    res.setHeader("X-Frame-Options", "ALLOWALL"); // embeddable
+    res.setHeader("X-Frame-Options", "ALLOWALL");
+    res.setHeader("Cache-Control", "public, max-age=300, stale-while-revalidate=60");
     res.setHeader("Content-Security-Policy", "default-src 'self' 'unsafe-inline' 'unsafe-eval' https: data:; frame-ancestors *;");
     res.send(dashboard.html_content);
   };
