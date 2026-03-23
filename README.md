@@ -2,84 +2,144 @@
 
 Generate embeddable, live-updating dashboards from any database using AI.
 
-Point the SDK at a Postgres, SQLite, or GraphQL source, describe what you want, and get back a self-contained HTML dashboard. Embed it in an iframe and push live data via postMessage — no page reload required.
+Point the SDK at a Postgres, SQLite, or GraphQL data source, describe what you want in plain English, and get back a self-contained HTML dashboard. Embed it in an iframe on your app and push live data to it via postMessage — charts update instantly without a page reload.
 
 ---
 
-## Install
+## Prerequisites
+
+- Node.js 18+
+- An OpenAI or Anthropic API key
+- A Postgres, SQLite, or GraphQL data source
+
+---
+
+## Setup
 
 ```bash
+# 1. Install
 npm install @dashy/sdk
-```
 
-Requires Node 18+. Peer deps: `react` + `react-dom` ≥ 18 (only if using the React component).
+# 2. Set your API key
+export OPENAI_API_KEY=sk-...
+# or
+export ANTHROPIC_API_KEY=sk-ant-...
+```
 
 ---
 
-## Quick Start
+## Generating Your First Dashboard
 
 ```ts
+// generate.ts
 import { createSDK } from "@dashy/sdk";
+import { writeFileSync } from "fs";
 
 const sdk = createSDK({
-  provider: "openai",
+  provider: "openai",                        // or "anthropic"
   openaiKey: process.env.OPENAI_API_KEY,
 });
 
 const dashboard = await sdk.generate(
-  { type: "postgres", connectionString: process.env.DATABASE_URL },
-  { prompt: "Monthly revenue, order count, and AOV for the past year", mode: "charts" }
+  {
+    type: "postgres",
+    connectionString: process.env.DATABASE_URL, // e.g. postgres://user:pass@host:5432/db
+  },
+  {
+    prompt: "Monthly revenue, order count, and average order value for the past year",
+    mode: "charts",      // "charts" | "mui" | "diagram"
+    entities: ["orders"], // which tables to use (optional — defaults to all)
+    dataLimit: 200,       // rows per table sent to AI (optional)
+  }
 );
 
-console.log(dashboard.html_content); // self-contained HTML, ready to serve
+// dashboard.html_content is a complete, self-contained HTML file
+writeFileSync("dashboard.html", dashboard.html_content);
+console.log("Saved to dashboard.html — open it in a browser");
 ```
 
-### Streaming (real-time preview)
+```bash
+npx tsx generate.ts
+```
+
+That's it. Open `dashboard.html` directly in a browser — it works standalone.
+
+---
+
+## Embedding in Your App
+
+Dashboards are designed to run inside an iframe. Use `prepareDoc` to make the HTML iframe-safe:
 
 ```ts
-for await (const chunk of sdk.stream(source, options)) {
-  if (chunk.type === "delta") process.stdout.write(chunk.text);
-  if (chunk.type === "done") console.log("Done:", chunk.dashboard.title);
-}
+// server.ts (Express example)
+import express from "express";
+import { createSDK, prepareDoc } from "@dashy/sdk";
+
+const app = express();
+const sdk = createSDK({ provider: "openai", openaiKey: process.env.OPENAI_API_KEY });
+
+// Generate once and cache the HTML
+let cachedHtml: string | null = null;
+
+app.get("/dashboard/frame", async (req, res) => {
+  if (!cachedHtml) {
+    const dashboard = await sdk.generate(
+      { type: "postgres", connectionString: process.env.DATABASE_URL },
+      { prompt: "Revenue trends for the past 12 months", mode: "charts" }
+    );
+    cachedHtml = prepareDoc(dashboard.html_content);
+  }
+  res.send(cachedHtml);
+});
+
+app.listen(3000);
+```
+
+```html
+<!-- In your frontend -->
+<iframe
+  src="/dashboard/frame"
+  sandbox="allow-scripts allow-same-origin"
+  style="width: 100%; height: 600px; border: none;"
+></iframe>
 ```
 
 ---
 
-## Embed in an iframe
+## Live Data (Push Updates Without Reloading)
+
+Dashboards use a `useDashyData(key, fallback)` hook internally. You can push fresh rows to it from the parent page at any time.
+
+### Step 1 — Find the data keys your dashboard uses
 
 ```ts
-import { prepareDoc } from "@dashy/sdk";
-
-// Wrap the raw HTML for safe iframe rendering
-const iframeHtml = prepareDoc(dashboard.html_content);
-
-// Serve iframeHtml at a route, then:
-// <iframe src="/dashboard/frame" sandbox="allow-scripts allow-same-origin"></iframe>
-```
-
----
-
-## Live Data Injection
-
-Every generated dashboard embeds a `useDashyData(key, fallback)` hook. Push fresh rows to it from the parent page via postMessage — charts update instantly, no reload.
-
-```ts
-// 1. Find which keys the dashboard uses
 import { extractSentinelKeys } from "@dashy/sdk";
+
 const keys = extractSentinelKeys(dashboard.html_content);
 // e.g. ["orders"]
-
-// 2. Inject fresh rows from the parent page
-const iframe = document.getElementById("dashboard-frame") as HTMLIFrameElement;
-iframe.contentWindow!.postMessage({
-  type: "DASHY_UPDATE",
-  data: {
-    orders: await db.query("SELECT * FROM orders WHERE created_at > now() - interval '12 months'")
-  }
-}, "*");
 ```
 
-> **Always send raw database rows** — the same shape as your source table. The dashboard handles aggregation (monthly rollups, bucketing, etc.) in the browser. Never pre-aggregate before injecting.
+### Step 2 — Push data via postMessage
+
+```ts
+const iframe = document.getElementById("my-dashboard") as HTMLIFrameElement;
+
+// Call this whenever you want to refresh the dashboard data
+function pushLiveData(rows: object[]) {
+  iframe.contentWindow!.postMessage({
+    type: "DASHY_UPDATE",
+    data: { orders: rows }   // key must match extractSentinelKeys output
+  }, "*");
+}
+
+// Example: push fresh data every 30 seconds
+setInterval(async () => {
+  const rows = await fetch("/api/orders/recent").then(r => r.json());
+  pushLiveData(rows);
+}, 30_000);
+```
+
+> **Send raw rows** — the same shape as your database table. The dashboard handles all aggregation (monthly rollups, bucketing, totals) in the browser. Do **not** pre-aggregate.
 
 ---
 
@@ -88,81 +148,32 @@ iframe.contentWindow!.postMessage({
 | Mode | Stack | Style | Best for |
 |------|-------|-------|----------|
 | `charts` | Recharts + MUI | Dark, glassmorphic | Analytics, KPI dashboards |
-| `mui` | MUI only | Dark, structured | Data overviews, admin panels |
-| `diagram` | D3 + SVG | Academic, white | Methodology flows, statistical figures |
+| `mui` | MUI components | Dark, structured | Data overviews, admin panels |
+| `diagram` | D3 + hand-crafted SVG | Academic, white bg | Methodology flows, statistical figures |
 
 ---
 
-## Full API
+## Streaming Generation
 
-### `createSDK(config)`
+For faster feedback (e.g. showing a live preview while the AI writes):
 
 ```ts
-createSDK({
-  provider?: "openai" | "anthropic"; // default: "anthropic"
-  openaiKey?: string;
-  anthropicKey?: string;
-  store?: DashboardStore;            // for publish/deploy
-})
-```
-
----
-
-### `sdk.generate(source, options)` → `Promise<Dashboard>`
-### `sdk.stream(source, options)` → `AsyncGenerator<delta | done>`
-
-**source**
-```ts
-{ type: "postgres"; connectionString: string; sampleSize?: number }
-{ type: "sqlite";   path: string }
-{ type: "graphql";  endpoint: string; headers?: Record<string, string> }
-```
-
-**options**
-```ts
-{
-  prompt: string;
-  mode?: "charts" | "mui" | "diagram"; // default: "charts"
-  entities?: string[];    // tables to include (default: all)
-  dataLimit?: number;     // rows per entity sent to the AI (default: 200)
-  data?: Record<string, Row[]>; // pre-fetched data (skips auto-query)
+for await (const chunk of sdk.stream(source, options)) {
+  if (chunk.type === "delta") {
+    process.stdout.write(chunk.text); // partial HTML as it streams
+  }
+  if (chunk.type === "done") {
+    const dashboard = chunk.dashboard;
+    writeFileSync("dashboard.html", dashboard.html_content);
+  }
 }
 ```
 
 ---
 
-### `sdk.introspect(source)` → `Promise<SemanticModel>`
+## Publish to the Dashy App
 
-Inspect the schema before generating — useful for previewing columns, row counts, and relationships.
-
----
-
-### `sdk.deploy(dashboard, options?)` → `Promise<Dashboard>`
-
-Enable live data and save to the configured store.
-
-```ts
-await sdk.deploy(dashboard, {
-  refreshInterval: 300,       // seconds between re-queries (default: 300)
-  sourceBindings?: string[],  // override which entity names are bound
-});
-```
-
----
-
-### `prepareDoc(html)` → `string`
-
-Prepares raw generated HTML for iframe embedding. Injects the DASHY bootstrap (postMessage listener + `useDashyData`), strips any duplicate declarations, and removes broken chart children.
-
----
-
-### `extractSentinelKeys(html)` → `string[]`
-
-Returns the entity key names embedded in a dashboard's sentinel markers. Use these as keys when injecting live data.
-
----
-
-## Publish to Dashy App
+If you're using the Dashy app as a backend, get an SDK key from **Settings → API Keys**, then:
 
 ```ts
 import { createSDK } from "@dashy/sdk";
@@ -172,41 +183,97 @@ const sdk = createSDK({
   provider: "openai",
   openaiKey: process.env.OPENAI_API_KEY,
   store: new DashyApiStore({
-    baseUrl: process.env.DASHY_BASE_URL,
+    baseUrl: process.env.DASHY_BASE_URL,  // e.g. https://app.dashy.com
     token: process.env.DASHY_SDK_KEY,
   }),
 });
 
 const dashboard = await sdk.generate(source, options);
-await sdk.deploy(dashboard, { refreshInterval: 300 });
-// Now live at your Dashy instance
-```
 
-Get a `DASHY_SDK_KEY` from **Settings → API Keys** in the Dashy app.
+// Save to Dashy and enable live refresh every 5 minutes
+await sdk.deploy(dashboard, { refreshInterval: 300 });
+
+console.log("Live at:", `${process.env.DASHY_BASE_URL}/dashboard/${dashboard.id}`);
+```
 
 ---
 
-## Express Middleware
+## Full API Reference
 
-Serve dashboards directly from an Express app:
+### `createSDK(config)` → `ReportSDK`
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `provider` | `"openai" \| "anthropic"` | `"anthropic"` | AI provider |
+| `openaiKey` | `string` | — | Required if provider is `"openai"` |
+| `anthropicKey` | `string` | — | Required if provider is `"anthropic"` |
+| `store` | `DashboardStore` | — | Optional persistence (Dashy, memory, etc.) |
+
+---
+
+### `sdk.generate(source, options)` → `Promise<Dashboard>`
+### `sdk.stream(source, options)` → `AsyncGenerator`
+
+**Source options:**
+```ts
+{ type: "postgres"; connectionString: string; sampleSize?: number }
+{ type: "sqlite";   path: string }
+{ type: "graphql";  endpoint: string; headers?: Record<string, string> }
+```
+
+**Generation options:**
+```ts
+{
+  prompt: string;                          // what to build
+  mode?: "charts" | "mui" | "diagram";    // default: "charts"
+  entities?: string[];                    // tables to use (default: all)
+  dataLimit?: number;                     // rows per table (default: 200)
+  data?: Record<string, Row[]>;           // pre-fetched rows (skips auto-query)
+}
+```
+
+---
+
+### `sdk.introspect(source)` → `Promise<SemanticModel>`
+
+Preview tables, columns, row counts, and relationships before generating.
+
+---
+
+### `sdk.deploy(dashboard, options?)` → `Promise<Dashboard>`
+
+Enable live data and save. Requires a `store` in config.
 
 ```ts
-import { reportMiddleware } from "@dashy/sdk/server";
-
-app.use("/reports", reportMiddleware({ sdk, store }));
-// GET /reports/:id       → renders the dashboard
-// POST /reports/generate → generates + returns dashboard JSON
+await sdk.deploy(dashboard, {
+  refreshInterval?: number,    // seconds (default: 300)
+  sourceBindings?: string[],   // override which entity names are live
+});
 ```
+
+---
+
+### `prepareDoc(html)` → `string`
+
+Makes raw generated HTML safe for iframe embedding. Injects the DASHY bootstrap (postMessage listener + `useDashyData`), strips duplicates, removes any broken chart children.
+
+---
+
+### `extractSentinelKeys(html)` → `string[]`
+
+Returns entity key names used in a dashboard. Use these as the `data` keys when calling postMessage.
 
 ---
 
 ## Data Sources
 
-| Source | Package | Notes |
-|--------|---------|-------|
-| PostgreSQL | `pg` (bundled) | Full schema introspection, FK detection |
-| SQLite | `better-sqlite3` (bundled) | Local files |
-| GraphQL | `graphql` (bundled) | Introspects via introspection query |
+| Source | Notes |
+|--------|-------|
+| PostgreSQL | Full schema introspection, FK detection, row counts |
+| SQLite | Works with local `.sqlite` / `.db` files |
+| GraphQL | Introspects via standard introspection query |
+
+All required packages (`pg`, `better-sqlite3`, `graphql`) are bundled.
 
 ---
 
