@@ -139,7 +139,17 @@ ${DASHY_BOOTSTRAP}
     }, [sourceName]);
     return s[0];
   };
-  Babel.transformScriptTags();
+  try {
+    Babel.transformScriptTags();
+  } catch(e) {
+    document.getElementById('root').innerHTML =
+      '<div style="font-family:monospace;padding:32px;color:#f87171;background:#0f1117;min-height:100vh">' +
+      '<div style="font-size:13px;font-weight:700;color:#fca5a5;margin-bottom:12px">⚠ Babel compile error</div>' +
+      '<pre style="white-space:pre-wrap;font-size:12px;color:#fca5a5;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.25);border-radius:8px;padding:16px">' +
+      (e.message || String(e)).replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</pre>' +
+      '<div style="margin-top:16px;font-size:11px;color:#64748b">The AI generated invalid JSX. Regenerate the dashboard to get a fixed version.</div>' +
+      '</div>';
+  }
 })();
 </script>
 <script type="text/babel" data-presets="react" id="__app_babel">
