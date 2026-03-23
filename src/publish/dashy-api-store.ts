@@ -87,9 +87,9 @@ export class DashyApiStore implements DashboardStore {
     if (!res.ok) {
       let body = "";
       try { body = await res.text(); } catch { /* ignore */ }
-      throw new Error(
-        `DashyApiStore ${context}: HTTP ${res.status} ${res.statusText}${body ? ` — ${body}` : ""}`
-      );
+      // Log internally but don't expose raw body in thrown error
+      if (body) console.error(`DashyApiStore ${context} response body:`, body.slice(0, 200));
+      throw new Error(`DashyApiStore ${context}: HTTP ${res.status}`);
     }
   }
 

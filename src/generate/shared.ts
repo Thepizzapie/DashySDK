@@ -101,5 +101,5 @@ export function buildDashboard(
 }
 
 export function generateId(): string {
-  return `dash_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+  return `dash_${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
 }

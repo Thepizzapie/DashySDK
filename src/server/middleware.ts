@@ -5,6 +5,7 @@ export interface ReportMiddlewareOptions {
   store: DashboardStore;
   /** Path prefix (default: "/dashboards") */
   path?: string;
+  auth?: (req: Request) => boolean | Promise<boolean>;
 }
 
 /**
@@ -22,6 +23,14 @@ export function reportMiddleware(opts: ReportMiddlewareOptions): RequestHandler 
   const { store } = opts;
 
   return async (req: Request, res: Response, next: NextFunction) => {
+    if (opts.auth) {
+      const allowed = await opts.auth(req);
+      if (!allowed) {
+        res.status(401).json({ error: "Unauthorized" });
+        return;
+      }
+    }
+
     const url = req.path;
 
     // List dashboards

@@ -11,7 +11,8 @@ const DASHY_BOOTSTRAP = [
   "window.__DASHY__={};window.__DASHY_LISTENERS__=[];",
   "window.__DASHY_SUBSCRIBE__=function(fn){window.__DASHY_LISTENERS__.push(fn);};",
   "window.__DASHY_UPDATE__=function(d){Object.assign(window.__DASHY__,d);window.__DASHY_LISTENERS__.forEach(function(fn){fn(window.__DASHY__);});};",
-  "window.addEventListener('message',function(e){if(e.data&&e.data.type==='DASHY_UPDATE')window.__DASHY_UPDATE__(e.data.data);});",
+  "var __DASHY_TRUSTED_ORIGIN__=null;",
+  "window.addEventListener('message',function(e){if(!e.data||e.data.type!=='DASHY_UPDATE')return;if(!__DASHY_TRUSTED_ORIGIN__)__DASHY_TRUSTED_ORIGIN__=e.origin;if(e.origin!==__DASHY_TRUSTED_ORIGIN__)return;window.__DASHY_UPDATE__(e.data.data);});",
   "</script>",
 ].join("\n");
 
@@ -201,12 +202,12 @@ ${DASHY_BOOTSTRAP}
 </style>
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 </head><body><div id="root"></div>
-<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-<script src="https://unpkg.com/prop-types@15/prop-types.min.js"></script>
+<script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/prop-types@15.8.1/prop-types.min.js"></script>
 <script src="https://unpkg.com/recharts@2.12.7/umd/Recharts.js"></script>
-<script src="https://unpkg.com/@mui/material@5/umd/material-ui.production.min.js"></script>
-<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/@mui/material@5.16.7/umd/material-ui.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7.26.3/babel.min.js"></script>
 <script>
 (function waitForGlobals() {
   if (!window.React || !window.ReactDOM || !window.Recharts || !window.MaterialUI || !window.Babel) {

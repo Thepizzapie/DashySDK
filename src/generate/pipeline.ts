@@ -9,6 +9,17 @@ import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import type { SDKConfig } from "../types.js";
 
+// ── Timeout helper ────────────────────────────────────────────────────────────
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error(`LLM call timed out after ${ms}ms (${label})`)), ms)
+    ),
+  ]);
+}
+
 // ── LLM call ──────────────────────────────────────────────────────────────────
 
 async function callLLM(
@@ -23,24 +34,32 @@ async function callLLM(
   if (provider === "openai") {
     const client = new OpenAI({ apiKey: config.openaiKey });
     const model = modelOverride ?? config.model ?? "gpt-5.4-nano";
-    const res = await client.chat.completions.create({
-      model,
-      max_completion_tokens: maxTokens,
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userPrompt },
-      ],
-    });
+    const res = await withTimeout(
+      client.chat.completions.create({
+        model,
+        max_completion_tokens: maxTokens,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+      }),
+      60000,
+      "openai"
+    );
     return res.choices[0]?.message?.content ?? "";
   } else {
     const client = new Anthropic({ apiKey: config.anthropicKey });
     const model = modelOverride ?? config.model ?? "claude-haiku-4-5-20251001";
-    const msg = await client.messages.create({
-      model,
-      max_tokens: maxTokens,
-      system: systemPrompt,
-      messages: [{ role: "user", content: userPrompt }],
-    });
+    const msg = await withTimeout(
+      client.messages.create({
+        model,
+        max_tokens: maxTokens,
+        system: systemPrompt,
+        messages: [{ role: "user", content: userPrompt }],
+      }),
+      60000,
+      "anthropic"
+    );
     return msg.content
       .filter((b): b is Anthropic.TextBlock => b.type === "text")
       .map(b => b.text)

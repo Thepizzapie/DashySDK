@@ -1,4 +1,5 @@
 import type { SemanticModel, ReportOptions, Row } from "../types.js";
+import { redactPiiColumns } from "../connectors/utils.js";
 
 export function buildSystemPrompt(
   model: SemanticModel,
@@ -10,8 +11,9 @@ export function buildSystemPrompt(
       `    - ${c.name} (${c.type}${c.isPrimaryKey ? ", PK" : ""}${c.isForeignKey ? `, FK→${c.references?.entity}.${c.references?.column}` : ""}): ${c.label}${c.role ? ` [${c.role}]` : ""}`
     ).join("\n");
     const rowInfo = e.rowCount != null ? ` — ~${e.rowCount.toLocaleString()} rows` : "";
-    const sampleStr = e.sample?.length
-      ? `\n  Sample rows:\n${JSON.stringify(e.sample.slice(0, 3), null, 2)
+    const safeSample = e.sample?.length ? redactPiiColumns(e.sample) : [];
+    const sampleStr = safeSample.length
+      ? `\n  Sample rows:\n${JSON.stringify(safeSample.slice(0, 3), null, 2)
           .split("\n").map(l => "  " + l).join("\n")}`
       : "";
     return `  ${e.label} (${e.name})${rowInfo}\n  Columns:\n${cols}${sampleStr}`;
@@ -224,7 +226,8 @@ OUTPUT FORMAT: Raw HTML document only. No markdown fences. No prose. No explanat
     window.__DASHY__={};window.__DASHY_LISTENERS__=[];
     window.__DASHY_SUBSCRIBE__=function(fn){window.__DASHY_LISTENERS__.push(fn);};
     window.__DASHY_UPDATE__=function(d){Object.assign(window.__DASHY__,d);window.__DASHY_LISTENERS__.forEach(function(fn){fn(window.__DASHY__);});};
-    window.addEventListener('message',function(e){if(e.data&&e.data.type==='DASHY_UPDATE')window.__DASHY_UPDATE__(e.data.data);});
+    var __DASHY_TRUSTED_ORIGIN__=null;
+    window.addEventListener('message',function(e){if(!e.data||e.data.type!=='DASHY_UPDATE')return;if(!__DASHY_TRUSTED_ORIGIN__)__DASHY_TRUSTED_ORIGIN__=e.origin;if(e.origin!==__DASHY_TRUSTED_ORIGIN__)return;window.__DASHY_UPDATE__(e.data.data);});
   </script>
   <style>
     html, body { margin: 0; padding: 0; background: #0a0c12; color: #fff; font-family: 'Plus Jakarta Sans', sans-serif; }
@@ -237,11 +240,11 @@ OUTPUT FORMAT: Raw HTML document only. No markdown fences. No prose. No explanat
 <body>
   <div id="root"></div>
   <script>window.addEventListener('error',function(e){var m=(e.error?e.error.message:e.message)||'Unknown error';document.body.innerHTML='<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;background:#0a0c12;font-family:monospace;padding:24px;box-sizing:border-box"><p style="color:#f87171;font-size:14px;margin:0 0 8px">&#x26a0; Render Error</p><pre style="background:#161b27;padding:12px;border-radius:6px;max-width:90%;overflow:auto;font-size:11px;color:#fca5a5;white-space:pre-wrap">'+m.replace(/&/g,'&amp;').replace(/</g,'&lt;')+'</pre></div>';},true);</script>
-  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
   <script>(function(){var n=function(){return null};var c=function(){return n};window.PropTypes={any:n,array:n,bool:n,func:n,number:n,object:n,string:n,symbol:n,node:n,element:n,elementType:n,arrayOf:c,objectOf:c,oneOf:c,oneOfType:c,shape:c,exact:c,instanceOf:c,checkPropTypes:n,resetWarningCache:n};})();</script>
-  <script crossorigin src="https://unpkg.com/@mui/material@5/umd/material-ui.production.min.js"></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script crossorigin src="https://unpkg.com/@mui/material@5.16.7/umd/material-ui.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.26.3/babel.min.js"></script>
   <script>
     window.useDashyData = window.useDashyData || function(sourceName, fallback) {
       var s = React.useState(function() { return window.__DASHY__?.[sourceName] ?? fallback; });
@@ -396,7 +399,8 @@ OUTPUT FORMAT: Raw HTML document only. No markdown fences. No prose. No explanat
     window.__DASHY__={};window.__DASHY_LISTENERS__=[];
     window.__DASHY_SUBSCRIBE__=function(fn){window.__DASHY_LISTENERS__.push(fn);};
     window.__DASHY_UPDATE__=function(d){Object.assign(window.__DASHY__,d);window.__DASHY_LISTENERS__.forEach(function(fn){fn(window.__DASHY__);});};
-    window.addEventListener('message',function(e){if(e.data&&e.data.type==='DASHY_UPDATE')window.__DASHY_UPDATE__(e.data.data);});
+    var __DASHY_TRUSTED_ORIGIN__=null;
+    window.addEventListener('message',function(e){if(!e.data||e.data.type!=='DASHY_UPDATE')return;if(!__DASHY_TRUSTED_ORIGIN__)__DASHY_TRUSTED_ORIGIN__=e.origin;if(e.origin!==__DASHY_TRUSTED_ORIGIN__)return;window.__DASHY_UPDATE__(e.data.data);});
   </script>
   <style>
     html, body { margin: 0; padding: 0; background: #0a0c12; color: #fff; font-family: 'Plus Jakarta Sans', sans-serif; }
@@ -409,12 +413,12 @@ OUTPUT FORMAT: Raw HTML document only. No markdown fences. No prose. No explanat
 <body>
   <div id="root"></div>
   <script>window.addEventListener('error',function(e){var m=(e.error?e.error.message:e.message)||'Unknown error';document.body.innerHTML='<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;background:#0a0c12;font-family:monospace;padding:24px;box-sizing:border-box"><p style="color:#f87171;font-size:14px;margin:0 0 8px">&#x26a0; Render Error</p><pre style="background:#161b27;padding:12px;border-radius:6px;max-width:90%;overflow:auto;font-size:11px;color:#fca5a5;white-space:pre-wrap">'+m.replace(/&/g,'&amp;').replace(/</g,'&lt;')+'</pre></div>';},true);</script>
-  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
   <script>(function(){var n=function(){return null};var c=function(){return n};window.PropTypes={any:n,array:n,bool:n,func:n,number:n,object:n,string:n,symbol:n,node:n,element:n,elementType:n,arrayOf:c,objectOf:c,oneOf:c,oneOfType:c,shape:c,exact:c,instanceOf:c,checkPropTypes:n,resetWarningCache:n};})();</script>
-  <script crossorigin src="https://unpkg.com/@mui/material@5/umd/material-ui.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/@mui/material@5.16.7/umd/material-ui.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/recharts@2.12.7/umd/Recharts.js"></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.26.3/babel.min.js"></script>
   <script>
     window.useDashyData = window.useDashyData || function(sourceName, fallback) {
       var s = React.useState(function() { return window.__DASHY__?.[sourceName] ?? fallback; });

@@ -1,6 +1,7 @@
 import { createConnector } from "./connectors/index.js";
 import { generateReport, generateReportStream } from "./generate/index.js";
 import { MemoryDashboardStore } from "./publish/index.js";
+import { redactPiiColumns } from "./connectors/utils.js";
 import type {
   SDKConfig,
   LLMProvider,
@@ -29,6 +30,7 @@ export { MemoryDashboardStore, MemoryReportStore } from "./publish/index.js";
 export { reportMiddleware } from "./server/middleware.js";
 export { extractSentinelKeys } from "./hydrate.js";
 export { prepareDoc } from "./frame/prepareDoc.js";
+export { redactPiiColumns } from "./connectors/utils.js";
 
 export interface DeployOptions {
   /** Re-query interval in seconds (default: 300 = 5 min) */
@@ -198,7 +200,7 @@ export class ReportSDK {
               `SELECT * FROM "${entity.sourceName}" LIMIT $1`,
               [limit]
             );
-            result[entityName] = rows;
+            result[entityName] = redactPiiColumns(rows);
           } else if (sourceType === "graphql") {
             const scalarCols = entity.columns
               .filter(c => !c.isForeignKey)
@@ -211,7 +213,7 @@ export class ReportSDK {
               const rows = await connector.query(
                 `{ ${entity.sourceName}(first: ${limit}) { ${scalarCols} } }`
               );
-              result[entityName] = rows;
+              result[entityName] = redactPiiColumns(rows);
             }
           }
         } catch (_) {
