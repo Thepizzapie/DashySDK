@@ -121,3 +121,133 @@ describe("reportMiddleware", () => {
     expect(res.type).toMatch(/html/);
   });
 });
+
+// ── Rate limiting tests ───────────────────────────────────────────────────────
+
+describe("rate limiting", () => {
+  it("allows requests under the limit", async () => {
+    const store = new MemoryDashboardStore();
+    const app = express();
+    app.use("/d", reportMiddleware({
+      store,
+      rateLimit: { windowMs: 60_000, maxRequests: 3 },
+    }));
+
+    // 3 requests should all be allowed
+    for (let i = 0; i < 3; i++) {
+      const res = await request(app).get("/d/");
+      expect(res.status).not.toBe(429);
+    }
+  });
+
+  it("returns 429 when limit exceeded", async () => {
+    const store = new MemoryDashboardStore();
+    const app = express();
+    app.use("/d", reportMiddleware({
+      store,
+      rateLimit: { windowMs: 60_000, maxRequests: 2 },
+    }));
+
+    await request(app).get("/d/");
+    await request(app).get("/d/");
+    const res = await request(app).get("/d/");
+    expect(res.status).toBe(429);
+    expect(res.body.error).toBe("Too many requests");
+    expect(res.headers["retry-after"]).toBeDefined();
+  });
+
+  it("includes X-RateLimit headers", async () => {
+    const store = new MemoryDashboardStore();
+    const app = express();
+    app.use("/d", reportMiddleware({
+      store,
+      rateLimit: { windowMs: 60_000, maxRequests: 10 },
+    }));
+
+    // First request creates the entry; second request triggers header injection
+    await request(app).get("/d/");
+    const res = await request(app).get("/d/");
+    expect(res.headers["x-ratelimit-limit"]).toBe("10");
+    expect(res.headers["x-ratelimit-remaining"]).toBeDefined();
+  });
+
+  it("health endpoint bypasses rate limit", async () => {
+    const store = new MemoryDashboardStore();
+    const app = express();
+    app.use("/d", reportMiddleware({
+      store,
+      rateLimit: { windowMs: 60_000, maxRequests: 1 },
+    }));
+
+    // exhaust limit
+    await request(app).get("/d/");
+    await request(app).get("/d/");
+
+    // health should still work
+    const res = await request(app).get("/d/health");
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe("ok");
+  });
+});
+
+// ── Health endpoint tests ─────────────────────────────────────────────────────
+
+describe("health endpoint", () => {
+  it("returns status ok with version and uptime", async () => {
+    const store = new MemoryDashboardStore();
+    const app = express();
+    app.use("/api", reportMiddleware({ store }));
+
+    const res = await request(app).get("/api/health");
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe("ok");
+    expect(res.body.version).toBeDefined();
+    expect(typeof res.body.uptimeMs).toBe("number");
+  });
+
+  it("health endpoint skips auth", async () => {
+    const store = new MemoryDashboardStore();
+    const app = express();
+    app.use("/api", reportMiddleware({
+      store,
+      auth: () => false, // rejects everything
+    }));
+
+    const res = await request(app).get("/api/health");
+    expect(res.status).toBe(200); // health bypasses auth
+  });
+});
+
+// ── ETag caching tests ────────────────────────────────────────────────────────
+
+describe("ETag caching", () => {
+  it("returns ETag header on dashboard HTML", async () => {
+    const store = new MemoryDashboardStore();
+    const dashboard = makeDashboard();
+    await store.save(dashboard);
+
+    const app = express();
+    app.use("/d", reportMiddleware({ store }));
+
+    const res = await request(app).get(`/d/${dashboard.id}`);
+    expect(res.status).toBe(200);
+    expect(res.headers["etag"]).toBeDefined();
+  });
+
+  it("returns 304 on matching If-None-Match", async () => {
+    const store = new MemoryDashboardStore();
+    const dashboard = makeDashboard();
+    await store.save(dashboard);
+
+    const app = express();
+    app.use("/d", reportMiddleware({ store }));
+
+    const first = await request(app).get(`/d/${dashboard.id}`);
+    const etag = first.headers["etag"];
+
+    const second = await request(app)
+      .get(`/d/${dashboard.id}`)
+      .set("If-None-Match", etag);
+    expect(second.status).toBe(304);
+  });
+});

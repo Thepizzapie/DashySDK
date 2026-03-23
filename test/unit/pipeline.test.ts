@@ -8,6 +8,7 @@
 
 import { describe, it, expect } from "vitest";
 import { generateId } from "../../src/generate/shared.js";
+import { SDKTimeoutError, SDKLLMError } from "../../src/errors.js";
 
 // ── Local reimplementation of withTimeout (mirrors pipeline.ts exactly) ──────
 
@@ -60,5 +61,28 @@ describe("generateId", () => {
     const sorted = [...ids].sort();
     const isAlreadySorted = ids.every((id, i) => id === sorted[i]);
     expect(isAlreadySorted).toBe(false);
+  });
+});
+
+// ── SDKTimeoutError / SDKLLMError tests ───────────────────────────────────────
+
+describe("SDKTimeoutError / SDKLLMError", () => {
+  it("SDKTimeoutError has correct name and step", () => {
+    const err = new SDKTimeoutError("openai");
+    expect(err.name).toBe("SDKTimeoutError");
+    expect(err.step).toBe("openai");
+    expect(err.message).toBe("LLM call timed out (openai)");
+  });
+
+  it("SDKLLMError has correct name, provider, statusCode", () => {
+    const err = new SDKLLMError("rate limited", "anthropic", 429);
+    expect(err.name).toBe("SDKLLMError");
+    expect(err.provider).toBe("anthropic");
+    expect(err.statusCode).toBe(429);
+  });
+
+  it("SDKLLMError without statusCode", () => {
+    const err = new SDKLLMError("network error", "openai");
+    expect(err.statusCode).toBeUndefined();
   });
 });
