@@ -3,6 +3,7 @@ import type {
   Connector, PostgresSourceConfig, SemanticModel,
   Entity, Column, Relationship, Metric, Row, ScalarType,
 } from "../types.js";
+import { humanize } from "./utils.js";
 
 // ── Type mapping ───────────────────────────────────────────────────────────────
 
@@ -119,7 +120,7 @@ export class PostgresConnector implements Connector {
       .map(fk => ({
         from: { entity: fk.table_name as string, column: fk.column_name as string },
         to: { entity: fk.foreign_table_name as string, column: fk.foreign_column_name as string },
-        type: "many-to-one" as "one-to-many", // FK implies many-to-one; flip for readability
+        type: "many-to-one",
       }));
 
     // Auto-infer metrics from numeric non-pk columns
@@ -204,9 +205,3 @@ export class PostgresConnector implements Connector {
   }
 }
 
-function humanize(str: string): string {
-  return str
-    .replace(/_/g, " ")
-    .replace(/([a-z])([A-Z])/g, "$1 $2")
-    .replace(/\b\w/g, c => c.toUpperCase());
-}

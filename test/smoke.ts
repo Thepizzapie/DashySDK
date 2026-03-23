@@ -1,9 +1,9 @@
 /**
- * Smoke test — no DB required, uses InlineConnector path via generateFromModel().
- * Run: npx tsx test/smoke.ts
+ * Smoke test — no DB required, uses generateFromModel().
+ * Run: ANTHROPIC_API_KEY=... npx tsx test/smoke.ts
  */
 
-import { ReportSDK } from "../src/index.js";
+import { ReportSDK, MemoryDashboardStore } from "../src/index.js";
 import type { SemanticModel } from "../src/index.js";
 
 const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
@@ -21,9 +21,9 @@ const model: SemanticModel = {
       label: "Sales",
       sourceName: "sales",
       columns: [
-        { name: "month",    label: "Month",    type: "string", nullable: false, isPrimaryKey: false, isForeignKey: false, role: "dimension" },
-        { name: "product",  label: "Product",  type: "string", nullable: false, isPrimaryKey: false, isForeignKey: false, role: "dimension" },
-        { name: "revenue",  label: "Revenue",  type: "number", nullable: false, isPrimaryKey: false, isForeignKey: false, role: "metric" },
+        { name: "month",   label: "Month",   type: "string", nullable: false, isPrimaryKey: false, isForeignKey: false, role: "dimension" },
+        { name: "product", label: "Product", type: "string", nullable: false, isPrimaryKey: false, isForeignKey: false, role: "dimension" },
+        { name: "revenue", label: "Revenue", type: "number", nullable: false, isPrimaryKey: false, isForeignKey: false, role: "metric" },
       ],
       rowCount: 6,
       sample: [
@@ -52,84 +52,51 @@ const model: SemanticModel = {
 
 // ── 2. Instantiate SDK ─────────────────────────────────────────────────────
 
-const sdk = new ReportSDK({
-  provider: "anthropic",
-  anthropicKey: ANTHROPIC_KEY,
-  publish: {
-    baseUrl: "http://localhost:3000",
-    secret: "smoke-test-secret-32-chars-minimum!",
-    tokenTtl: 3600,
-  },
-});
+const store = new MemoryDashboardStore();
+const sdk = new ReportSDK({ provider: "anthropic", anthropicKey: ANTHROPIC_KEY, store });
 
-// ── 3. Generate report ─────────────────────────────────────────────────────
+// ── 3. Generate dashboard ──────────────────────────────────────────────────
 
-console.log("Generating report via generateFromModel()…");
+console.log("Generating dashboard via generateFromModel()…");
 
-const report = await sdk.generateFromModel(
+const dashboard = await sdk.generateFromModel(
   model,
-  {
-    prompt: "Show monthly revenue by product as a bar chart with a summary table",
-    mode: "charts",
-    style: "light",
-  },
-  // Pass the sample rows as queryData so Claude has real data to plot
+  { prompt: "Show monthly revenue by product as a bar chart with a summary table", mode: "charts" },
   { sales: model.entities[0].sample! as Record<string, unknown>[] }
 );
 
-console.log("\n── Report ──────────────────────────────────────────");
-console.log("Title      :", report.title);
-console.log("ID         :", report.id);
-console.log("Created    :", report.createdAt.toISOString());
-console.log("HTML length:", report.html.length, "chars");
-console.log("\nFirst 300 chars of HTML:");
-console.log(report.html.slice(0, 300));
+console.log("\n── Dashboard ───────────────────────────────────────");
+console.log("Title      :", dashboard.title);
+console.log("ID         :", dashboard.id);
+console.log("Mode       :", dashboard.mode);
+console.log("Created    :", dashboard.created_at.toISOString());
+console.log("HTML length:", dashboard.html_content.length, "chars");
 
 // ── 4. Verify DOCTYPE ──────────────────────────────────────────────────────
 
-if (!report.html.toLowerCase().includes("<!doctype")) {
+if (!dashboard.html_content.toLowerCase().includes("<!doctype")) {
   console.error("\n❌  FAIL: HTML does not contain <!DOCTYPE");
   process.exit(1);
 }
 console.log("\n✅  PASS: HTML contains <!DOCTYPE");
 
-// ── 5. Publish + verify JWT + embed codes ──────────────────────────────────
+// ── 5. Verify sentinel markers present (live data architecture) ────────────
 
-console.log("\nPublishing report…");
-const published = await sdk.publish(report);
+const hasSentinels = /DASHY_DATA:/.test(dashboard.html_content);
+console.log(`\n${hasSentinels ? "✅" : "⚠️ "}  Sentinel markers: ${hasSentinels ? "present" : "none (inline mode — expected)"}`);
 
-console.log("\n── Published ───────────────────────────────────────");
-console.log("ID         :", published.id);
-console.log("URL        :", published.url);
-console.log("Token      :", published.token.slice(0, 60) + "…");
-console.log("Expires at :", published.expiresAt?.toISOString() ?? "never");
-console.log("\niframe snippet:");
-console.log(published.iframeCode);
-console.log("\nscript snippet:");
-console.log(published.scriptCode);
+// ── 6. Publish + verify store ──────────────────────────────────────────────
 
-// Verify token is a valid JWT (3 base64url segments)
-const parts = published.token.split(".");
-if (parts.length !== 3) {
-  console.error("\n❌  FAIL: token does not look like a JWT (expected 3 segments)");
-  process.exit(1);
-}
-console.log("\n✅  PASS: token is a well-formed JWT");
+console.log("\nPublishing dashboard…");
+await sdk.publish(dashboard);
 
-// Verify embed codes contain the report ID
-if (!published.iframeCode.includes(published.id) || !published.scriptCode.includes(published.id)) {
-  console.error("\n❌  FAIL: embed codes do not reference the report ID");
-  process.exit(1);
-}
-console.log("✅  PASS: embed codes reference the report ID");
-
-// Verify the report is retrievable via list()
 const listed = await sdk.list();
-const found = listed.find(r => r.id === published.id);
+const found = listed.find(d => d.id === dashboard.id);
 if (!found) {
-  console.error("\n❌  FAIL: published report not found in sdk.list()");
+  console.error("\n❌  FAIL: published dashboard not found in sdk.list()");
   process.exit(1);
 }
-console.log("✅  PASS: report appears in sdk.list()");
+console.log("✅  PASS: dashboard appears in sdk.list()");
+console.log(`   sdk.list() returned ${listed.length} dashboard(s)`);
 
 console.log("\n🎉  All smoke-test assertions passed.\n");

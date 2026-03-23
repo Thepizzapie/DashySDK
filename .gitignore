@@ -9,3 +9,7 @@ dist/
 test/output/
 coverage/
 *.log
+
+
+#Ignore vscode AI rules
+.github\instructions\codacy.instructions.md

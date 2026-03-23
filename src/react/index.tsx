@@ -1,92 +1,101 @@
 import * as React from "react";
+import { prepareDoc } from "../frame/prepareDoc.js";
 
-export interface ReportFrameProps {
-  /** JWT token returned by publisher.publish() */
-  token: string;
-  /** Base URL where the report middleware is mounted */
-  baseUrl: string;
-  /** Report ID */
-  reportId: string;
+export interface DashyFrameProps {
+  /** Generated dashboard HTML from sdk.generate() / sdk.stream() */
+  html: string;
+  /**
+   * Live data keyed by entity name — sent into the iframe via postMessage.
+   * Keys must match the sentinel names in the HTML (e.g. "orders", "products").
+   * When this prop changes the iframe re-renders its charts without reloading.
+   */
+  data?: Record<string, unknown[]>;
+  /**
+   * Called on a timer to fetch fresh data. Returns the same shape as `data`.
+   * Requires `refreshInterval` to be set.
+   */
+  onRefresh?: () => Promise<Record<string, unknown[]>>;
+  /** Auto-refresh interval in ms (requires onRefresh). E.g. 30_000 for 30 s. */
+  refreshInterval?: number;
   /** iframe width (default: "100%") */
   width?: string | number;
-  /** iframe height (default: 600) */
+  /** iframe height (default: 500) */
   height?: string | number;
-  /** Extra className on the wrapper div */
   className?: string;
-  /** Extra style on the wrapper div */
   style?: React.CSSProperties;
-  /** Called when the iframe finishes loading */
+  /** Called when the iframe finishes its initial load */
   onLoad?: () => void;
-  /** Called on load error */
-  onError?: (err: Error) => void;
 }
 
 /**
- * Drop-in React component for embedding a published report.
+ * Drop-in React component for rendering a generated Dashy dashboard.
+ *
+ * The iframe is set once from `html` and never reloaded. Live data is pushed
+ * in via postMessage, so the dashboard's React state (active tabs, scroll
+ * position, filters) is preserved across refreshes.
  *
  * @example
- * <ReportFrame
- *   reportId={published.id}
- *   token={published.token}
- *   baseUrl="https://yourapp.com"
- *   height={500}
+ * // Minimal — static fallback data baked into the HTML
+ * <DashyFrame html={dashboard.html_content} height={500} />
+ *
+ * @example
+ * // Live — push fresh data every 30 s without reloading
+ * <DashyFrame
+ *   html={dashboard.html_content}
+ *   data={{ orders: liveOrders }}
+ *   onRefresh={async () => ({ orders: await fetchOrders() })}
+ *   refreshInterval={30_000}
  * />
  */
-export function ReportFrame({
-  token,
-  baseUrl,
-  reportId,
+export function DashyFrame({
+  html,
+  data,
+  onRefresh,
+  refreshInterval,
   width = "100%",
-  height = 600,
+  height = 500,
   className,
   style,
   onLoad,
-  onError,
-}: ReportFrameProps) {
-  const src = `${baseUrl.replace(/\/$/, "")}/reports/${reportId}?token=${encodeURIComponent(token)}`;
-  const [loaded, setLoaded] = React.useState(false);
+}: DashyFrameProps) {
+  const iframeRef = React.useRef<HTMLIFrameElement>(null);
+
+  // Prepare the doc once — only rebuild if html changes
+  const srcDoc = React.useMemo(() => prepareDoc(html), [html]);
+
+  // Push data into iframe whenever the data prop changes
+  React.useEffect(() => {
+    if (!data) return;
+    iframeRef.current?.contentWindow?.postMessage({ type: "DASHY_UPDATE", data }, "*");
+  }, [data]);
+
+  // Auto-refresh loop
+  React.useEffect(() => {
+    if (!onRefresh || !refreshInterval) return;
+    const id = setInterval(async () => {
+      try {
+        const fresh = await onRefresh();
+        iframeRef.current?.contentWindow?.postMessage({ type: "DASHY_UPDATE", data: fresh }, "*");
+      } catch (e) {
+        console.warn("[DashyFrame] refresh failed:", e);
+      }
+    }, refreshInterval);
+    return () => clearInterval(id);
+  }, [onRefresh, refreshInterval]);
 
   return (
     <div
       className={className}
-      style={{
-        position: "relative",
-        width,
-        height,
-        ...style,
-      }}
+      style={{ width, height, position: "relative", ...style }}
     >
-      {!loaded && (
-        <div
-          style={{
-            position: "absolute",
-            inset: 0,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            background: "rgba(0,0,0,0.04)",
-            borderRadius: 8,
-          }}
-        >
-          <span style={{ color: "#6b7280", fontSize: 14 }}>Loading report…</span>
-        </div>
-      )}
       <iframe
-        src={src}
-        width="100%"
-        height="100%"
-        frameBorder={0}
-        style={{ border: "none", borderRadius: 8, display: loaded ? "block" : "none" }}
-        onLoad={() => {
-          setLoaded(true);
-          onLoad?.();
-        }}
-        onError={() => onError?.(new Error(`Failed to load report ${reportId}`))}
-        title={`Report ${reportId}`}
+        ref={iframeRef}
+        srcDoc={srcDoc}
         sandbox="allow-scripts"
+        style={{ border: "none", width: "100%", height: "100%", display: "block" }}
+        title="Dashy Dashboard"
+        onLoad={onLoad}
       />
     </div>
   );
 }
-
-export type { ReportFrameProps as default };

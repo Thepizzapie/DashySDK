@@ -1,44 +1,34 @@
 /**
- * Example: Express server with report serving middleware + React embed.
+ * Example: Express server that generates and serves dashboards on demand.
  *
- * Run: npx ts-node examples/express-server.ts
+ * Run: ANTHROPIC_API_KEY=... DATABASE_URL=... npx tsx examples/express-server.ts
  * Then visit: http://localhost:3000
  */
 import express from "express";
-import { createSDK, ReportPublisher, reportMiddleware } from "../src/index.js";
+import { createSDK, MemoryDashboardStore, reportMiddleware } from "../src/index.js";
 
+const store = new MemoryDashboardStore();
 const sdk = createSDK({
   anthropicKey: process.env.ANTHROPIC_API_KEY!,
-  publish: {
-    baseUrl: "http://localhost:3000",
-    secret: process.env.REPORT_SECRET ?? "dev-secret",
-    tokenTtl: 3600, // 1 hour tokens
-  },
+  store,
 });
 
 const app = express();
 app.use(express.json());
 
-// Serve published reports at /reports/:id?token=...
-// Access the publisher via the SDK's internal publish config
-const publisher = new ReportPublisher({
-  baseUrl: "http://localhost:3000",
-  secret: process.env.REPORT_SECRET ?? "dev-secret",
-});
-app.use("/reports", reportMiddleware({ publisher }));
+// Serve dashboard HTML at /reports/:id
+app.use("/reports", reportMiddleware({ store }));
 
-// API: generate a report on demand
+// API: generate a dashboard on demand
 app.post("/api/generate", async (req, res) => {
   try {
-    const { prompt, mode, style } = req.body;
-    const published = await sdk.generateAndPublish(
-      {
-        type: "postgres",
-        connectionString: process.env.DATABASE_URL!,
-      },
-      { prompt, mode, style }
+    const { prompt, mode } = req.body as { prompt: string; mode?: string };
+    const dashboard = await sdk.generate(
+      { type: "postgres", connectionString: process.env.DATABASE_URL! },
+      { prompt, mode: (mode ?? "charts") as any }
     );
-    res.json(published);
+    await sdk.publish(dashboard);
+    res.json({ id: dashboard.id, title: dashboard.title, mode: dashboard.mode });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -50,9 +40,15 @@ app.get("/", (_req, res) => {
     <html><body style="font-family:sans-serif;padding:2rem">
       <h1>Dashy SDK Demo</h1>
       <form onsubmit="generate(event)">
-        <textarea name="prompt" rows="3" style="width:100%" placeholder="Describe the report you want..."></textarea><br>
-        <select name="mode"><option>charts</option><option>table</option><option>infographic</option><option>executive</option></select>
-        <button type="submit">Generate Report</button>
+        <textarea name="prompt" rows="3" style="width:100%" placeholder="Describe the dashboard you want..."></textarea><br><br>
+        <select name="mode">
+          <option value="charts">charts</option>
+          <option value="mui">mui</option>
+          <option value="html">html</option>
+          <option value="infographic">infographic</option>
+          <option value="diagram">diagram</option>
+        </select>
+        <button type="submit">Generate</button>
       </form>
       <div id="result"></div>
       <script>
@@ -66,10 +62,10 @@ app.get("/", (_req, res) => {
             body: JSON.stringify({ prompt: fd.get('prompt'), mode: fd.get('mode') })
           });
           const data = await res.json();
-          document.getElementById('result').innerHTML = \`
-            <p><a href="\${data.url}" target="_blank">Open report</a></p>
-            <iframe src="\${data.url}" width="100%" height="600" frameborder="0"></iframe>
-          \`;
+          if (data.error) { document.getElementById('result').innerHTML = 'Error: ' + data.error; return; }
+          document.getElementById('result').innerHTML =
+            '<p><a href="/reports/' + data.id + '" target="_blank">Open: ' + data.title + '</a></p>' +
+            '<iframe src="/reports/' + data.id + '" width="100%" height="600" frameborder="0"></iframe>';
         }
       </script>
     </body></html>

@@ -25,10 +25,22 @@ export function buildSystemPrompt(
     `  ${m.label}: ${m.expression}`
   ).join("\n");
 
+  // Build entity totals map from the semantic model (these are the real table counts)
+  const entityTotals: Record<string, number> = {};
+  for (const e of model.entities) {
+    if (e.rowCount != null && e.rowCount > 0) entityTotals[e.name] = e.rowCount;
+  }
+
   const dataSection = Object.entries(queryData).map(([key, rows]) => {
     const limited = rows.slice(0, options.dataLimit ?? 200);
-    return `### ${key} (${limited.length} rows${rows.length > limited.length ? `, truncated from ${rows.length}` : ""})\n${JSON.stringify(limited)}`;
+    const total = entityTotals[key];
+    const totalNote = total ? ` — total in database: ~${total.toLocaleString()} rows` : "";
+    return `### ${key} (${limited.length} representative rows provided for visualization${totalNote})\n${JSON.stringify(limited)}`;
   }).join("\n\n");
+
+  const totalsSection = Object.entries(entityTotals)
+    .map(([name, count]) => `  ${name}: ${count.toLocaleString()} rows`)
+    .join("\n");
 
   const schemaContext = `## DATA SOURCE
 Type: ${model.source.type}${model.source.name ? ` (${model.source.name})` : ""}
@@ -44,7 +56,22 @@ ${relSummaries || "  None detected"}
 ### Available Metrics
 ${metricSummaries || "  None defined"}
 
-## DATA (use ALL of this — hardcode it directly into your output)
+## ACTUAL DATABASE TOTALS (use these for KPI counts, totals, and headlines — not the row counts below)
+${totalsSection || "  (see entity row counts in schema above)"}
+
+## DATA FOR VISUALIZATION
+The rows below are a representative sample for building charts and tables. Wrap EVERY data array with sentinel markers so the SDK can inject the full dataset at deploy time:
+
+  const myData = /*DASHY_DATA:entity_name*/[...rows...]/*END_DASHY_DATA*/;
+
+Rules:
+- Sentinel arrays MUST contain RAW database rows exactly as provided — NEVER pre-aggregate into derived objects like { month, revenue, aov } or { bucket, orders }. Raw rows only (e.g. { id, created_at, total, status }).
+- ALL aggregation (monthly rollups, sums, counts, bucketing, ratios) MUST happen inside useMemo in the React component — not in the data array itself.
+- Use the ACTUAL DATABASE TOTALS above for any KPI tiles showing counts, sums, or totals
+- Use the provided rows (wrapped in sentinel markers) for charts, tables, and breakdowns
+- NEVER label anything "(sample)" — present the data as authoritative
+- ALWAYS wrap data arrays with the sentinel comment pattern above
+
 ${dataSection || "No pre-fetched data provided — use the schema sample rows above to generate realistic representative data."}`;
 
   const mode = options.mode ?? "charts";
@@ -193,6 +220,12 @@ OUTPUT FORMAT: Raw HTML document only. No markdown fences. No prose. No explanat
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" />
+  <script>
+    window.__DASHY__={};window.__DASHY_LISTENERS__=[];
+    window.__DASHY_SUBSCRIBE__=function(fn){window.__DASHY_LISTENERS__.push(fn);};
+    window.__DASHY_UPDATE__=function(d){Object.assign(window.__DASHY__,d);window.__DASHY_LISTENERS__.forEach(function(fn){fn(window.__DASHY__);});};
+    window.addEventListener('message',function(e){if(e.data&&e.data.type==='DASHY_UPDATE')window.__DASHY_UPDATE__(e.data.data);});
+  </script>
   <style>
     html, body { margin: 0; padding: 0; background: #0a0c12; color: #fff; font-family: 'Plus Jakarta Sans', sans-serif; }
     ::-webkit-scrollbar { width: 8px; height: 8px; }
@@ -209,8 +242,17 @@ OUTPUT FORMAT: Raw HTML document only. No markdown fences. No prose. No explanat
   <script>(function(){var n=function(){return null};var c=function(){return n};window.PropTypes={any:n,array:n,bool:n,func:n,number:n,object:n,string:n,symbol:n,node:n,element:n,elementType:n,arrayOf:c,objectOf:c,oneOf:c,oneOfType:c,shape:c,exact:c,instanceOf:c,checkPropTypes:n,resetWarningCache:n};})();</script>
   <script crossorigin src="https://unpkg.com/@mui/material@5/umd/material-ui.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script>
+    window.useDashyData = window.useDashyData || function(sourceName, fallback) {
+      var s = React.useState(function() { return window.__DASHY__?.[sourceName] ?? fallback; });
+      React.useEffect(function() {
+        window.__DASHY_SUBSCRIBE__?.(function(d) { if (d[sourceName] !== undefined) s[1](d[sourceName]); });
+      }, [sourceName]);
+      return s[0];
+    };
+  </script>
   <script type="text/babel" data-presets="react">
-    const { useState, useMemo, useCallback, useRef } = React;
+    const { useState, useEffect, useMemo, useCallback, useRef } = React;
     const {
       ThemeProvider, createTheme, CssBaseline, alpha,
       Box, Stack, Grid, Paper, Divider,
@@ -239,7 +281,7 @@ OUTPUT FORMAT: Raw HTML document only. No markdown fences. No prose. No explanat
         background: { default: '#0a0c12', paper: '#161b27' },
         text: { primary: '#ffffff', secondary: '#94a3b8' }
       },
-      shape: { borderRadius: 16 },
+      shape: { borderRadius: 4 },
       typography: {
         fontFamily: '"Plus Jakarta Sans", sans-serif',
         h1: { fontWeight: 900 }, h2: { fontWeight: 900 }, h3: { fontWeight: 800 },
@@ -309,16 +351,20 @@ OUTPUT FORMAT: Raw HTML document only. No markdown fences. No prose. No explanat
 
 ## Rules
 1. Output ONLY the complete HTML document. No markdown. No prose.
-2. Embed all data as JS const arrays in the script. Do not fetch at runtime.
-3. Use the SleekStat and GlassCard components defined in the template for a premium look.
-4. Make the dashboard visually complete, asymmetrical (Bento style), and highly polished.
-5. Every generation must include at least one interactive element (tabs, filters, or search).
-6. CRITICAL: Check all closing tags match.
+2. Use the SleekStat and GlassCard components defined in the template for a premium look.
+3. Make the dashboard visually complete, asymmetrical (Bento style), and highly polished.
+4. Every generation must include at least one interactive element (tabs, filters, or search).
+5. CRITICAL: Check all closing tags match.
 
-## DATA EMBEDDING RULE
-When you declare a JS variable containing rows from a named dataset, wrap the array with sentinel comments:
-  const myVar = /*DASHY_DATA:dataset_name*/[...rows...]/*END_DASHY_DATA*/;
-Use the exact entity name from DATA CONTEXT. Only wrap direct dataset arrays, not computed ones.
+## Live data pattern (REQUIRED for all data arrays)
+Every data array MUST use this pattern so live data can be injected without a page reload:
+\`\`\`js
+const ORDERS_DATA = /*DASHY_DATA:orders*/[{ month: 'Jan', revenue: 4200 }, ...]/*END_DASHY_DATA*/;
+const orders = useDashyData('orders', ORDERS_DATA);
+\`\`\`
+- The sentinel const holds hardcoded example data as fallback.
+- useDashyData returns live data when injected via postMessage, otherwise the fallback.
+- Source name must match the entity name exactly as provided in the DATA CONTEXT.
 
 ## DATA CONTEXT:
 ${schemaContext}`;
@@ -344,6 +390,12 @@ OUTPUT FORMAT: Raw HTML document only. No markdown fences. No prose. No explanat
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" />
+  <script>
+    window.__DASHY__={};window.__DASHY_LISTENERS__=[];
+    window.__DASHY_SUBSCRIBE__=function(fn){window.__DASHY_LISTENERS__.push(fn);};
+    window.__DASHY_UPDATE__=function(d){Object.assign(window.__DASHY__,d);window.__DASHY_LISTENERS__.forEach(function(fn){fn(window.__DASHY__);});};
+    window.addEventListener('message',function(e){if(e.data&&e.data.type==='DASHY_UPDATE')window.__DASHY_UPDATE__(e.data.data);});
+  </script>
   <style>
     html, body { margin: 0; padding: 0; background: #0a0c12; color: #fff; font-family: 'Plus Jakarta Sans', sans-serif; }
     ::-webkit-scrollbar { width: 8px; height: 8px; }
@@ -361,8 +413,17 @@ OUTPUT FORMAT: Raw HTML document only. No markdown fences. No prose. No explanat
   <script crossorigin src="https://unpkg.com/@mui/material@5/umd/material-ui.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/recharts@2.12.7/umd/Recharts.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script>
+    window.useDashyData = window.useDashyData || function(sourceName, fallback) {
+      var s = React.useState(function() { return window.__DASHY__?.[sourceName] ?? fallback; });
+      React.useEffect(function() {
+        window.__DASHY_SUBSCRIBE__?.(function(d) { if (d[sourceName] !== undefined) s[1](d[sourceName]); });
+      }, [sourceName]);
+      return s[0];
+    };
+  </script>
   <script type="text/babel" data-presets="react">
-    const { useState, useMemo, useCallback } = React;
+    const { useState, useEffect, useMemo, useCallback } = React;
     const {
       ThemeProvider, createTheme, CssBaseline, alpha,
       Box, Stack, Grid, Paper, Divider,
@@ -386,7 +447,7 @@ OUTPUT FORMAT: Raw HTML document only. No markdown fences. No prose. No explanat
         background: { default: '#0a0c12', paper: '#161b27' },
         text: { primary: '#ffffff', secondary: '#94a3b8' }
       },
-      shape: { borderRadius: 16 },
+      shape: { borderRadius: 4 },
       typography: {
         fontFamily: '"Plus Jakarta Sans", sans-serif',
         h4: { fontWeight: 900 }, h6: { fontWeight: 800 }, subtitle2: { fontWeight: 700 }
@@ -433,15 +494,25 @@ OUTPUT FORMAT: Raw HTML document only. No markdown fences. No prose. No explanat
 
 ## Rules
 1. Output ONLY the complete HTML. No markdown. No prose.
-2. Hard-code data as const arrays computed before return.
-3. Use ONLY Recharts + MUI components.
-4. Use at least 4 different chart types in a 2x2 or Bento grid.
-5. Add interactivity: tabs or time-range toggles.
+2. Use ONLY Recharts + MUI components.
+3. Use at least 4 different chart types in a 2x2 or Bento grid.
+4. Add interactivity: tabs or time-range toggles.
+5. NEVER set overflow:hidden on any GlassCard or Box wrapping a Recharts chart — it clips the chart. Only SleekStat may use overflow hidden.
+6. Keep chart container heights explicit (e.g. height={320}) so cards stay rectangular, not circular.
+7. NEVER put <Line> or <Area> inside a <BarChart> — use <ComposedChart> when mixing chart types. Every Bar/Line/Area child MUST have a dataKey prop, or Recharts throws an Invariant error.
+8. Every <YAxis> in a ComposedChart mixing Bar and Line MUST have a yAxisId, and each child must reference it (yAxisId="left" / yAxisId="right").
+9. Each sentinel key maps to ONE entity's raw rows. Aggregate inside useMemo — never store aggregated data in a sentinel array.
 
-## DATA EMBEDDING RULE
-When you declare a JS variable containing rows from a named dataset, wrap the array with sentinel comments:
-  const myVar = /*DASHY_DATA:dataset_name*/[...rows...]/*END_DASHY_DATA*/;
-Use the exact entity name from DATA CONTEXT. Only wrap direct dataset arrays, not computed ones.
+## Live data pattern (REQUIRED for all data arrays)
+Every data array a chart or table reads from MUST use this pattern so live data can be injected without a page reload:
+\`\`\`js
+const ORDERS_DATA = /*DASHY_DATA:orders*/[{ month: 'Jan', revenue: 4200 }, ...]/*END_DASHY_DATA*/;
+// Then in the component:
+const orders = useDashyData('orders', ORDERS_DATA);
+\`\`\`
+- The sentinel const holds hardcoded example data as fallback.
+- useDashyData returns live data when injected via postMessage, otherwise the fallback.
+- Source name must match the entity name exactly as provided in the DATA CONTEXT.
 
 ## DATA CONTEXT:
 ${schemaContext}`;

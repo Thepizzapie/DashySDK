@@ -2,6 +2,7 @@ import type {
   Connector, GraphQLSourceConfig, SemanticModel,
   Entity, Column, Relationship, Row, ScalarType,
 } from "../types.js";
+import { humanize } from "./utils.js";
 
 // ── GQL scalar mapping ─────────────────────────────────────────────────────────
 
@@ -181,7 +182,7 @@ export class GraphQLConnector implements Connector {
           relationships.push({
             from: { entity: typeName, column: ref.column },
             to: { entity: ref.entity, column: "id" },
-            type: "many-to-one" as "one-to-many",
+            type: "many-to-one",
           });
         }
       }
@@ -224,9 +225,3 @@ export class GraphQLConnector implements Connector {
   }
 }
 
-function humanize(str: string): string {
-  return str
-    .replace(/_/g, " ")
-    .replace(/([a-z])([A-Z])/g, "$1 $2")
-    .replace(/\b\w/g, c => c.toUpperCase());
-}

@@ -1,6 +1,6 @@
 # @dashy/sdk
 
-Generate beautiful, embeddable HTML reports from any data source using Claude AI.
+Generate embeddable HTML dashboards from any data source using Claude AI.
 
 ## Install
 
@@ -11,24 +11,24 @@ npm install @dashy/sdk
 ## Quick start
 
 ```ts
-import { createSDK } from "@dashy/sdk";
+import { createSDK, MemoryDashboardStore } from "@dashy/sdk";
 
 const sdk = createSDK({
   anthropicKey: process.env.ANTHROPIC_API_KEY!,
-  publish: {
-    baseUrl: "https://yourapp.com",
-    secret: process.env.REPORT_SECRET!,
-  },
+  store: new MemoryDashboardStore(),
 });
 
-// Generate + publish in one call
-const published = await sdk.generateAndPublish(
+// Generate a dashboard
+const dashboard = await sdk.generate(
   { type: "postgres", connectionString: process.env.DATABASE_URL! },
-  { prompt: "Monthly revenue by product line", mode: "charts", style: "dark" }
+  { prompt: "Monthly revenue by product line", mode: "charts" }
 );
 
-console.log(published.url);       // https://yourapp.com/reports/rpt_xxx?token=...
-console.log(published.iframeCode); // ready-to-paste <iframe>
+console.log(dashboard.title);          // "Revenue by Product Line"
+console.log(dashboard.html_content);   // full HTML document
+
+// Publish to store and enable live data (5-min refresh)
+await sdk.deploy(dashboard, { refreshInterval: 300 });
 ```
 
 ## Data sources
@@ -51,65 +51,70 @@ console.log(published.iframeCode); // ready-to-paste <iframe>
 { type: "inline", model: mySemanticModel }
 ```
 
-## Report modes
+## Dashboard modes
 
 | Mode | Description |
 |------|-------------|
 | `charts` | Multi-chart analytics dashboard (Recharts) |
-| `table` | Sortable data table with search + pagination |
+| `mui` | Material UI data-rich layout with tables and KPIs |
+| `html` | Plain HTML document — no React, fully portable |
 | `infographic` | Visual one-pager — big numbers, progress bars |
-| `executive` | KPI cards + one main chart + bullet takeaways |
-
-## Embedding in Express
-
-```ts
-import express from "express";
-import { createSDK, reportMiddleware } from "@dashy/sdk";
-
-const sdk = createSDK({ anthropicKey: "...", publish: { baseUrl: "...", secret: "..." } });
-
-const app = express();
-app.use("/reports", reportMiddleware({ publisher: sdk["publisher"] }));
-```
-
-## Embedding in React
-
-```tsx
-import { ReportFrame } from "@dashy/sdk/react";
-
-<ReportFrame
-  reportId={published.id}
-  token={published.token}
-  baseUrl="https://yourapp.com"
-  height={500}
-/>
-```
+| `diagram` | D3/SVG entity relationship or flow diagram |
 
 ## Streaming generation
 
 ```ts
 for await (const event of sdk.stream(source, options)) {
   if (event.type === "delta") process.stdout.write(event.text);
-  if (event.type === "done") console.log("Report:", event.report.title);
+  if (event.type === "done") console.log("Done:", event.dashboard.title);
 }
+```
+
+## Introspect schema first
+
+```ts
+const model = await sdk.introspect({ type: "postgres", connectionString: "..." });
+console.log(model.entities.map(e => e.name));
+```
+
+## Generate from a pre-built model
+
+```ts
+const dashboard = await sdk.generateFromModel(model, { prompt: "...", mode: "charts" }, queryData);
+```
+
+## Express middleware
+
+```ts
+import express from "express";
+import { createSDK, MemoryDashboardStore, reportMiddleware } from "@dashy/sdk";
+
+const store = new MemoryDashboardStore();
+const sdk = createSDK({ anthropicKey: "...", store });
+
+const app = express();
+app.use("/reports", reportMiddleware({ store }));
 ```
 
 ## Custom store
 
-Implement `ReportStore` to persist reports in your own database:
+Implement `DashboardStore` to persist dashboards in your own database:
 
 ```ts
-import type { ReportStore, Report } from "@dashy/sdk";
+import type { DashboardStore, Dashboard } from "@dashy/sdk";
 
-class MyDbStore implements ReportStore {
-  async save(report: Report) { await db.insert(report); }
+class MyDbStore implements DashboardStore {
+  async save(dashboard: Dashboard) { await db.upsert(dashboard); }
   async get(id: string) { return db.findById(id); }
   async list() { return db.findAll(); }
   async delete(id: string) { await db.delete(id); }
 }
 
-const sdk = createSDK({
-  anthropicKey: "...",
-  publish: { baseUrl: "...", secret: "...", store: new MyDbStore() },
-});
+const sdk = createSDK({ anthropicKey: "...", store: new MyDbStore() });
+```
+
+## OpenAI provider
+
+```ts
+const sdk = createSDK({ provider: "openai", openaiKey: process.env.OPENAI_API_KEY! });
 ```

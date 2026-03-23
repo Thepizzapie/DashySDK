@@ -159,9 +159,12 @@ export class DashyApiStore implements DashboardStore {
   }
 
   async list(): Promise<Dashboard[]> {
-    const res = await fetch(`${this.baseUrl}/api/dashboards`, { headers: this.headers() });
+    const res = await fetch(`${this.baseUrl}/api/dashboards?limit=100`, { headers: this.headers() });
     await this.assertOk(res, "list");
-    return (await res.json() as ApiDashboard[]).map(mapApiToDashboard);
+    const body = await res.json() as any;
+    // API returns { dashboards: [...], total, limit, offset } or plain array
+    const rows: ApiDashboard[] = Array.isArray(body) ? body : (body.dashboards ?? []);
+    return rows.map(mapApiToDashboard);
   }
 
   async delete(id: string): Promise<void> {

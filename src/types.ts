@@ -30,7 +30,7 @@ export interface Entity {
 export interface Relationship {
   from: { entity: string; column: string };
   to: { entity: string; column: string };
-  type: "one-to-one" | "one-to-many" | "many-to-many";
+  type: "one-to-one" | "one-to-many" | "many-to-one" | "many-to-many";
   label?: string;
 }
 
@@ -114,13 +114,6 @@ export interface ReportOptions {
   entities?: string[];
   /** Max rows to send to the AI per entity (default: 200). Keep small — this goes in the prompt. */
   dataLimit?: number;
-  /**
-   * Max rows to hydrate into the final HTML per entity (default: 5000).
-   * After generation the SDK re-queries the same source at full scale and
-   * replaces the AI's sample arrays with real data before returning.
-   * Set to 0 to disable hydration.
-   */
-  hydrateLimit?: number;
 }
 
 export interface Dashboard {

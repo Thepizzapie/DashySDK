@@ -1,7 +1,6 @@
 import { createConnector } from "./connectors/index.js";
 import { generateReport, generateReportStream } from "./generate/index.js";
 import { MemoryDashboardStore } from "./publish/index.js";
-import { hydrateHtml, extractSentinelKeys } from "./hydrate.js";
 import type {
   SDKConfig,
   LLMProvider,
@@ -28,6 +27,8 @@ export type { Connector } from "./types.js";
 export { createConnector } from "./connectors/index.js";
 export { MemoryDashboardStore, MemoryReportStore } from "./publish/index.js";
 export { reportMiddleware } from "./server/middleware.js";
+export { extractSentinelKeys } from "./hydrate.js";
+export { prepareDoc } from "./frame/prepareDoc.js";
 
 export interface DeployOptions {
   /** Re-query interval in seconds (default: 300 = 5 min) */
@@ -42,6 +43,13 @@ export class ReportSDK {
   private store?: DashboardStore;
 
   constructor(private config: SDKConfig) {
+    const provider = config.provider ?? "anthropic";
+    if (provider === "anthropic" && !config.anthropicKey) {
+      throw new Error("anthropicKey is required when provider is \"anthropic\"");
+    }
+    if (provider === "openai" && !config.openaiKey) {
+      throw new Error("openaiKey is required when provider is \"openai\"");
+    }
     if (config.store) {
       this.store = config.store;
     }
@@ -79,8 +87,7 @@ export class ReportSDK {
     try {
       const model = await connector.introspect();
       const queryData = await this.fetchQueryData(connector, model, options);
-      const dashboard = await generateReport(model, options, this.config, queryData);
-      return await this.autoHydrate(dashboard, connector, model, options);
+      return await generateReport(model, options, this.config, queryData);
     } finally {
       await connector.disconnect();
     }
@@ -117,12 +124,7 @@ export class ReportSDK {
       const model = await connector.introspect();
       const queryData = await this.fetchQueryData(connector, model, options);
       for await (const chunk of generateReportStream(model, options, this.config, queryData)) {
-        if (chunk.type === "done") {
-          const hydrated = await this.autoHydrate(chunk.dashboard, connector, model, options);
-          yield { type: "done", dashboard: hydrated };
-        } else {
-          yield chunk;
-        }
+        yield chunk;
       }
     } finally {
       await connector.disconnect();
@@ -133,8 +135,8 @@ export class ReportSDK {
    * Save a dashboard to the configured store, returning the saved dashboard.
    */
   async publish(dashboard: Dashboard): Promise<Dashboard> {
-    const store = this.store ?? new MemoryDashboardStore();
-    await store.save(dashboard);
+    if (!this.store) throw new Error("SDK not configured with a store — pass store: new MemoryDashboardStore() to createSDK()");
+    await this.store.save(dashboard);
     return dashboard;
   }
 
@@ -167,46 +169,6 @@ export class ReportSDK {
   }
 
   /**
-   * Re-query the already-open connector at full scale and replace AI sample
-   * arrays with real data. Runs automatically after every generate/stream.
-   */
-  private async autoHydrate(
-    dashboard: Dashboard,
-    connector: { query(q: string, params?: unknown[]): Promise<Row[]> },
-    model: SemanticModel,
-    options: ReportOptions
-  ): Promise<Dashboard> {
-    const hydrateLimit = options.hydrateLimit ?? 5000;
-    if (hydrateLimit === 0) return dashboard;
-
-    const sentinelKeys = extractSentinelKeys(dashboard.html_content);
-    if (sentinelKeys.length === 0) return dashboard;
-
-    const fullData: Record<string, Row[]> = {};
-    await Promise.all(
-      sentinelKeys.map(async key => {
-        const entity = model.entities.find(e => e.name === key);
-        if (!entity) return;
-        try {
-          if (model.source.type === "postgres") {
-            fullData[key] = await connector.query(
-              `SELECT * FROM "${entity.sourceName}" LIMIT $1`,
-              [hydrateLimit]
-            );
-          }
-        } catch (_) {
-          // Non-fatal — leaves sample data for this entity
-        }
-      })
-    );
-
-    dashboard.html_content = hydrateHtml(dashboard.html_content, fullData);
-    const hydrated = Object.keys(fullData).filter(k => fullData[k]?.length > 0);
-    if (hydrated.length > 0) dashboard.source_bindings = hydrated;
-    return dashboard;
-  }
-
-  /**
    * Fetch pre-query data for entities targeted in options.entities.
    * Falls back to data in options.data if provided.
    */
@@ -229,6 +191,9 @@ export class ReportSDK {
         try {
           const sourceType = model.source.type;
           if (sourceType === "postgres") {
+            if (entity.sourceName.includes('"') || entity.sourceName.includes(';')) {
+              throw new Error(`Unsafe entity sourceName: ${entity.sourceName}`);
+            }
             const rows = await connector.query(
               `SELECT * FROM "${entity.sourceName}" LIMIT $1`,
               [limit]
@@ -240,6 +205,9 @@ export class ReportSDK {
               .map(c => c.name)
               .join(" ");
             if (scalarCols) {
+              if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(entity.sourceName)) {
+                throw new Error(`Unsafe entity sourceName for GraphQL: ${entity.sourceName}`);
+              }
               const rows = await connector.query(
                 `{ ${entity.sourceName}(first: ${limit}) { ${scalarCols} } }`
               );
