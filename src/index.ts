@@ -238,14 +238,15 @@ export class ReportSDK {
             );
             result[entityName] = redactPiiColumns(rows);
           } else if (sourceType === "graphql") {
+            const GQL_SAFE = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
+            if (!GQL_SAFE.test(entity.sourceName)) {
+              throw new Error(`Unsafe entity sourceName for GraphQL: ${entity.sourceName}`);
+            }
             const scalarCols = entity.columns
-              .filter(c => !c.isForeignKey)
+              .filter(c => !c.isForeignKey && GQL_SAFE.test(c.name))
               .map(c => c.name)
               .join(" ");
             if (scalarCols) {
-              if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(entity.sourceName)) {
-                throw new Error(`Unsafe entity sourceName for GraphQL: ${entity.sourceName}`);
-              }
               const rows = await connector.query(
                 `{ ${entity.sourceName}(first: ${limit}) { ${scalarCols} } }`
               );

@@ -16,7 +16,9 @@ export async function generateReportOpenAI(
     options.mode ?? "charts",
     systemPrompt,
     systemPrompt,
-    config
+    config,
+    undefined,
+    config.logger
   );
   return buildDashboard(html, options, model, queryData);
 }

@@ -8,6 +8,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import type { SDKConfig } from "../types.js";
+import type { Logger } from "../logger.js";
 import { SDKTimeoutError, SDKLLMError } from "../errors.js";
 
 // ── Timeout helper ────────────────────────────────────────────────────────────
@@ -23,6 +24,7 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
 
 async function retryWithBackoff<T>(
   fn: () => Promise<T>,
+  provider: string,
   maxAttempts = 3,
   baseDelayMs = 500
 ): Promise<T> {
@@ -41,8 +43,6 @@ async function retryWithBackoff<T>(
       }
     }
   }
-  // Exhausted retries — wrap in SDKLLMError
-  const provider = "unknown";
   throw new SDKLLMError(
     `LLM call failed after ${maxAttempts} attempts: ${(lastErr as Error)?.message ?? String(lastErr)}`,
     provider
@@ -218,12 +218,18 @@ export async function runPipeline(
   systemPrompt: string,
   dataContext: string,
   config: SDKConfig,
-  onStep?: (step: string) => void
+  onStep?: (step: string) => void,
+  logger?: Logger
 ): Promise<PipelineResult> {
   const isEditorial = mode === "infographic" || mode === "diagram";
   const MAX_REFINE_LOOPS = isEditorial ? 1 : 2;
   const haiku = cheapModel(config);
-  const emit = (step: string) => onStep?.(step);
+  const provider = config.provider ?? "anthropic";
+  const emit = (step: string) => {
+    onStep?.(step);
+    logger?.log("debug", `pipeline step: ${step}`, { mode, step });
+  };
+  const retry = <T>(fn: () => Promise<T>) => retryWithBackoff(fn, provider);
 
   // ── Step 1: Planner (+ Stylist for dashboard modes) ──────────────────────────
 
@@ -232,7 +238,7 @@ export async function runPipeline(
 
   if (isEditorial) {
     emit("planning");
-    const planRaw = await retryWithBackoff(() => callLLM(
+    const planRaw = await retry(() => callLLM(
       buildEditorialPlannerPrompt(mode, dataContext),
       `User request: ${userPrompt}`,
       { ...config, model: haiku },
@@ -246,13 +252,13 @@ export async function runPipeline(
   } else {
     emit("planning");
     const [planRaw, styleRaw] = await Promise.all([
-      retryWithBackoff(() => callLLM(
+      retry(() => callLLM(
         buildPlannerPrompt(),
         `User request: ${userPrompt}\n\nDATA CONTEXT:\n${dataContext}`,
         { ...config, model: haiku },
         2000
       )),
-      retryWithBackoff(() => callLLM(
+      retry(() => callLLM(
         buildStylistPrompt(),
         `User request: ${userPrompt}`,
         { ...config, model: haiku },
@@ -317,19 +323,19 @@ USER REQUEST:\n${userPrompt}`;
 
   emit("generating");
   const vizMaxTokens = isEditorial ? 10000 : 16000;
-  let html = await retryWithBackoff(() => callLLM(systemPrompt, visualizerPrompt, config, vizMaxTokens));
+  let html = await retry(() => callLLM(systemPrompt, visualizerPrompt, config, vizMaxTokens));
 
   // ── Step 3: Inspector + Critic in parallel ────────────────────────────────────
 
   emit("inspecting");
   const [layoutRaw, criticRaw] = await Promise.all([
-    retryWithBackoff(() => callLLM(
+    retry(() => callLLM(
       buildLayoutInspectorPrompt(mode),
       `HTML TO INSPECT:\n${html}`,
       { ...config, model: haiku },
       1500
     )),
-    retryWithBackoff(() => callLLM(
+    retry(() => callLLM(
       buildCriticPrompt(mode),
       `ORIGINAL USER REQUEST:\n${userPrompt}\n\nGENERATED HTML:\n${html}`,
       { ...config, model: haiku },
@@ -379,12 +385,12 @@ Apply all fixes. Return complete improved HTML. No other changes.
 CURRENT HTML:
 ${html}`;
 
-    html = await retryWithBackoff(() => callLLM(systemPrompt, refinePrompt, config, 16000));
+    html = await retry(() => callLLM(systemPrompt, refinePrompt, config, 16000));
     refinements++;
 
     if (refinements < MAX_REFINE_LOOPS) {
       try {
-        const recriticRaw = await retryWithBackoff(() => callLLM(
+        const recriticRaw = await retry(() => callLLM(
           buildCriticPrompt(mode),
           `ORIGINAL USER REQUEST:\n${userPrompt}\n\nGENERATED HTML:\n${html}`,
           { ...config, model: haiku },

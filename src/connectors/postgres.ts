@@ -4,6 +4,7 @@ import type {
   Entity, Column, Relationship, Metric, Row, ScalarType,
 } from "../types.js";
 import { humanize } from "./utils.js";
+import { SDKConnectorError } from "../errors.js";
 
 // Block RFC-1918 / loopback addresses to prevent SSRF
 function assertNotPrivateHost(connectionString: string): void {
@@ -12,11 +13,10 @@ function assertNotPrivateHost(connectionString: string): void {
     const url = new URL(connectionString);
     const host = url.hostname.toLowerCase();
     if (isPrivateHost(host)) {
-      throw new Error(`Connection to private/loopback host blocked: ${host}`);
+      throw new SDKConnectorError(`Connection to private/loopback host blocked: ${host}`, "postgres");
     }
   } catch (e: unknown) {
-    // If it's our own error, re-throw
-    if ((e as Error).message?.startsWith("Connection to private")) throw e;
+    if (e instanceof SDKConnectorError) throw e;
     // Unparseable connection string — allow (pg will handle the error)
   }
 }

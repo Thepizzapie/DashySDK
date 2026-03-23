@@ -17,7 +17,9 @@ export async function generateReportAnthropic(
     options.mode ?? "charts",
     systemPrompt,
     dataContext,
-    config
+    config,
+    undefined,
+    config.logger
   );
   return buildDashboard(html, options, model, queryData);
 }

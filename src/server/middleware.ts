@@ -26,6 +26,15 @@ function createRateLimiter(config: RateLimitConfig = {}) {
   );
   const store = new Map<string, RateLimitEntry>();
 
+  // Prune expired entries every windowMs to prevent unbounded growth
+  const pruneInterval = setInterval(() => {
+    const now = Date.now();
+    for (const [k, v] of store) {
+      if (v.resetAt <= now) store.delete(k);
+    }
+  }, windowMs);
+  if (pruneInterval.unref) pruneInterval.unref(); // don't prevent process exit
+
   return function rateLimitMiddleware(req: Request, res: Response): boolean {
     const key = keyFn(req);
     const now = Date.now();

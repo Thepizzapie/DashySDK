@@ -159,7 +159,7 @@ export interface SDKConfig {
   /**
    * Model override.
    * Anthropic default: "claude-haiku-4-5-20251001"
-   * OpenAI default: "gpt-4.5-nano"
+   * OpenAI default: "gpt-5.4-nano"
    */
   model?: string;
   /** Optional store for saving generated dashboards */

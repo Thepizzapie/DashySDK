@@ -66,6 +66,9 @@ export function DashyFrame({
   // Push data into iframe whenever the data prop changes
   React.useEffect(() => {
     if (!data) return;
+    // "*" is intentional: srcDoc iframes have a null origin so a specific target
+    // would silently drop the message. The iframe's own trusted-origin lock
+    // (set on first postMessage received) prevents spoofing from other frames.
     iframeRef.current?.contentWindow?.postMessage({ type: "DASHY_UPDATE", data }, "*");
   }, [data]);
 
