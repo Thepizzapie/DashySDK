@@ -22,7 +22,8 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
-    "test": "node --experimental-vm-modules node_modules/.bin/jest"
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
@@ -40,7 +41,10 @@
     "@types/node": "^22.0.0",
     "@types/pg": "^8.11.0",
     "@types/react": "^18.0.0",
-    "typescript": "^5.4.0"
+    "@types/supertest": "^7.2.0",
+    "supertest": "^7.2.2",
+    "typescript": "^5.4.0",
+    "vitest": "^4.1.0"
   },
   "peerDependencies": {
     "react": ">=18.0.0",
