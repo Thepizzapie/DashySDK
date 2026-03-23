@@ -4,6 +4,29 @@ import type {
 } from "../types.js";
 import { humanize } from "./utils.js";
 
+// Block RFC-1918 / loopback addresses to prevent SSRF
+function assertNotPrivateHost(endpoint: string): void {
+  try {
+    const url = new URL(endpoint);
+    const host = url.hostname.toLowerCase();
+    if (isPrivateHost(host)) {
+      throw new Error(`Connection to private/loopback host blocked: ${host}`);
+    }
+  } catch (e: unknown) {
+    if ((e as Error).message?.startsWith("Connection to private")) throw e;
+  }
+}
+
+function isPrivateHost(host: string): boolean {
+  if (host === "localhost" || host === "::1") return true;
+  if (/^127\./.test(host)) return true;
+  if (/^10\./.test(host)) return true;
+  if (/^192\.168\./.test(host)) return true;
+  if (/^172\.(1[6-9]|2[0-9]|3[01])\./.test(host)) return true;
+  if (/^169\.254\./.test(host)) return true;
+  return false;
+}
+
 // ── GQL scalar mapping ─────────────────────────────────────────────────────────
 
 function gqlTypeToScalar(typeName: string): ScalarType {
@@ -55,7 +78,9 @@ function unwrapType(type: any): { name: string; isList: boolean } {
 export class GraphQLConnector implements Connector {
   private schema: any = null;
 
-  constructor(private config: GraphQLSourceConfig) {}
+  constructor(private config: GraphQLSourceConfig) {
+    assertNotPrivateHost(config.endpoint);
+  }
 
   async connect() {
     // Verify connection by running a minimal query
@@ -210,18 +235,24 @@ export class GraphQLConnector implements Connector {
   }
 
   private async gqlFetch(query: string): Promise<any> {
-    const res = await fetch(this.config.endpoint, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...this.config.headers,
-      },
-      body: JSON.stringify({ query }),
-    });
-    if (!res.ok) throw new Error(`GraphQL request failed: ${res.status}`);
-    const json = await res.json() as any;
-    if (json.errors?.length) throw new Error(json.errors[0].message);
-    return json;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 15_000);
+    try {
+      const res = await fetch(this.config.endpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...this.config.headers,
+        },
+        body: JSON.stringify({ query }),
+        signal: controller.signal,
+      });
+      if (!res.ok) throw new Error(`GraphQL request failed: ${res.status}`);
+      const json = await res.json() as any;
+      if (json.errors?.length) throw new Error(json.errors[0].message);
+      return json;
+    } finally {
+      clearTimeout(timer);
+    }
   }
 }
-

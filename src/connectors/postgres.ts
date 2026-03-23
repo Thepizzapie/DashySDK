@@ -1,9 +1,40 @@
-import { Client } from "pg";
+import { Pool } from "pg";
 import type {
   Connector, PostgresSourceConfig, SemanticModel,
   Entity, Column, Relationship, Metric, Row, ScalarType,
 } from "../types.js";
 import { humanize } from "./utils.js";
+
+// Block RFC-1918 / loopback addresses to prevent SSRF
+function assertNotPrivateHost(connectionString: string): void {
+  try {
+    // pg connection strings: postgres://user:pass@host:port/db
+    const url = new URL(connectionString);
+    const host = url.hostname.toLowerCase();
+    if (isPrivateHost(host)) {
+      throw new Error(`Connection to private/loopback host blocked: ${host}`);
+    }
+  } catch (e: unknown) {
+    // If it's our own error, re-throw
+    if ((e as Error).message?.startsWith("Connection to private")) throw e;
+    // Unparseable connection string — allow (pg will handle the error)
+  }
+}
+
+function isPrivateHost(host: string): boolean {
+  // Loopback
+  if (host === "localhost" || host === "::1") return true;
+  if (/^127\./.test(host)) return true;
+  // RFC-1918
+  if (/^10\./.test(host)) return true;
+  if (/^192\.168\./.test(host)) return true;
+  if (/^172\.(1[6-9]|2[0-9]|3[01])\./.test(host)) return true;
+  // Link-local
+  if (/^169\.254\./.test(host)) return true;
+  return false;
+}
+
+const DB_QUERY_FORBIDDEN = /\b(DROP|DELETE|INSERT|UPDATE|CREATE|ALTER|TRUNCATE|EXEC|EXECUTE)\b/i;
 
 // ── Type mapping ───────────────────────────────────────────────────────────────
 
@@ -28,22 +59,31 @@ function inferRole(col: Column, pgType: string): Column["role"] {
 // ── Postgres connector ─────────────────────────────────────────────────────────
 
 export class PostgresConnector implements Connector {
-  private client: Client;
+  private pool: Pool;
 
   constructor(private config: PostgresSourceConfig) {
-    this.client = new Client({ connectionString: config.connectionString });
+    assertNotPrivateHost(config.connectionString);
+    this.pool = new Pool({
+      connectionString: config.connectionString,
+      max: 5,
+      idleTimeoutMillis: 30_000,
+      connectionTimeoutMillis: 5_000,
+      statement_timeout: 10_000,
+    });
   }
 
   async connect() {
-    await this.client.connect();
+    // Test connection
+    const client = await this.pool.connect();
+    client.release();
   }
 
   async disconnect() {
-    await this.client.end();
+    await this.pool.end();
   }
 
   async query(sql: string, params: unknown[] = []): Promise<Row[]> {
-    const result = await this.client.query(sql, params);
+    const result = await this.pool.query(sql, params);
     return result.rows;
   }
 
@@ -97,12 +137,15 @@ export class PostgresConnector implements Connector {
       tables.map(async (table): Promise<Entity> => {
         const cols = tableMap.get(table)!;
         let sample: Row[] = [];
-        try {
-          const res = await this.client.query(
-            `SELECT * FROM "${table}" LIMIT $1`, [sampleSize]
-          );
-          sample = res.rows;
-        } catch (_) {}
+        // Validate table name doesn't contain forbidden SQL keywords
+        if (DB_QUERY_FORBIDDEN.test(table)) {
+          sample = [];
+        } else {
+          try {
+            const res = await this.pool.query(`SELECT * FROM "${table}" LIMIT $1`, [sampleSize]);
+            sample = res.rows;
+          } catch (_) {}
+        }
         return {
           name: table,
           label: humanize(table),
@@ -151,7 +194,7 @@ export class PostgresConnector implements Connector {
 
   private async fetchColumns(): Promise<Row[]> {
     const schema = "public";
-    const result = await this.client.query(`
+    const result = await this.pool.query(`
       SELECT c.table_name, c.column_name, c.udt_name, c.is_nullable, c.ordinal_position
       FROM information_schema.columns c
       JOIN information_schema.tables t
@@ -164,7 +207,7 @@ export class PostgresConnector implements Connector {
   }
 
   private async fetchPrimaryKeys(): Promise<Row[]> {
-    const result = await this.client.query(`
+    const result = await this.pool.query(`
       SELECT tc.table_name, kcu.column_name
       FROM information_schema.table_constraints tc
       JOIN information_schema.key_column_usage kcu
@@ -177,7 +220,7 @@ export class PostgresConnector implements Connector {
   }
 
   private async fetchForeignKeys(): Promise<Row[]> {
-    const result = await this.client.query(`
+    const result = await this.pool.query(`
       SELECT
         kcu.table_name,
         kcu.column_name,
@@ -195,7 +238,7 @@ export class PostgresConnector implements Connector {
   }
 
   private async fetchRowCounts(): Promise<Map<string, number>> {
-    const result = await this.client.query(`
+    const result = await this.pool.query(`
       SELECT relname AS table_name, reltuples::bigint AS row_count
       FROM pg_class
       JOIN pg_namespace ON pg_namespace.oid = pg_class.relnamespace
@@ -204,4 +247,3 @@ export class PostgresConnector implements Connector {
     return new Map(result.rows.map(r => [r.table_name as string, Number(r.row_count)]));
   }
 }
-
