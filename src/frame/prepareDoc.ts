@@ -64,7 +64,8 @@ export function prepareDoc(html: string): string {
         .replace(/const\s+root\s*=\s*ReactDOM\.createRoot[\s\S]*?root\.render[\s\S]*?;/g, "")
         .replace(/ReactDOM\.createRoot[\s\S]*?\.render[\s\S]*?;/g, "")
         .replace(/^export\s+default\s+/m, "const __DefaultExport = ");
-      return buildTemplate(fixJsxSyntax(stripUseDashyData(code)));
+        const cleaned = fixJsxSyntax(stripUseDashyData(code));
+      return buildTemplate(cleaned, findRootComponents(cleaned));
     }
   }
 
@@ -81,10 +82,32 @@ export function prepareDoc(html: string): string {
     .replace(/import\s+\{[^}]*\}\s+from\s+['"][^'"]+['"]\s*;?/gs, "")
     .replace(/^import\s+.*?from\s+['"][^'"]+['"]\s*;?\s*$/gm, "")
     .replace(/^export\s+default\s+/m, "const __DefaultExport = ");
-  return buildTemplate(fixJsxSyntax(stripUseDashyData(code)));
+  const cleaned = fixJsxSyntax(stripUseDashyData(code));
+  return buildTemplate(cleaned, findRootComponents(cleaned));
 }
 
-function buildTemplate(code: string): string {
+/** Scan code for top-level PascalCase function/const declarations — these are React components. */
+function findRootComponents(code: string): string[] {
+  const names: string[] = [];
+  const re = /(?:^|\n)\s*(?:function\s+([A-Z][A-Za-z0-9_]*)\s*\(|const\s+([A-Z][A-Za-z0-9_]*)\s*=\s*(?:\(|React\.memo|forwardRef))/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(code)) !== null) {
+    const name = m[1] || m[2];
+    if (name && !names.includes(name)) names.push(name);
+  }
+  return names;
+}
+
+function buildTemplate(code: string, componentNames: string[] = []): string {
+  // Build __exports chain: well-known names first, then any PascalCase names found in code (last defined = most likely root)
+  const knownNames = ["__DefaultExport", "Dashboard", "GeneratedUI", "App"];
+  // Filter out non-component utility names heuristically (e.g. GlassCard, SleekStat are sub-components, not roots)
+  // We use the last PascalCase name found as it's typically the top-level wrapper
+  const extraNames = componentNames.filter(n => !knownNames.includes(n));
+  const allCandidates = [...knownNames, ...[...extraNames].reverse()];
+  const exportsChain = allCandidates
+    .map(n => `typeof ${n} !== 'undefined' ? ${n}`)
+    .join("\n  : ") + "\n  : null";
   return `<!DOCTYPE html><html><head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
@@ -136,10 +159,7 @@ const { Box, Stack, Grid, Typography, Card, CardContent, Chip, LinearProgress,
   Drawer, AppBar, Toolbar, Menu, Snackbar, Dialog, DialogTitle, DialogContent,
   DialogActions, CardHeader, CardActions, AvatarGroup, ButtonBase, alpha } = MaterialUI;
 ${code}
-const __exports = typeof __DefaultExport !== 'undefined' ? __DefaultExport
-  : typeof Dashboard !== 'undefined' ? Dashboard
-  : typeof GeneratedUI !== 'undefined' ? GeneratedUI
-  : typeof App !== 'undefined' ? App : null;
+const __exports = ${exportsChain};
 if (__exports) ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(__exports));
 </script></body></html>`;
 }
