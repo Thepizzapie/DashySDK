@@ -145,37 +145,23 @@ setInterval(async () => {
 
 ## `generate` vs `stream`
 
-Both methods connect to your database, run the AI, and return the same `Dashboard` object. The difference is when you get it:
+Both are a **single LLM call** with the same source and options. The only difference is how you consume the tokens:
 
-| | `generate` | `stream` |
-|---|---|---|
-| Returns | `Promise<Dashboard>` | `AsyncGenerator` |
-| When you get the result | After full generation completes | Incrementally as the AI writes |
-| Use when | Server-side, scripts, caching | Live preview UI, showing progress to the user |
+- **`generate`** collects all tokens internally and resolves with the complete `Dashboard` once done
+- **`stream`** yields each token delta as it arrives, then yields a final `done` chunk with the `Dashboard`
 
-**`generate` — wait for the full result:**
 ```ts
-// Blocks until the entire dashboard HTML is ready (~10–30s depending on complexity)
+// generate — resolves when the full HTML is ready
 const dashboard = await sdk.generate(source, options);
-console.log(dashboard.html_content); // complete HTML
-```
 
-**`stream` — get tokens as they arrive:**
-```ts
-// Yields { type: "delta", text: string } chunks as the AI writes,
-// then a final { type: "done", dashboard: Dashboard } when complete.
+// stream — yields deltas as tokens arrive, then done
 for await (const chunk of sdk.stream(source, options)) {
-  if (chunk.type === "delta") {
-    process.stdout.write(chunk.text); // partial HTML, good for live preview
-  }
-  if (chunk.type === "done") {
-    const dashboard = chunk.dashboard; // full Dashboard object
-    writeFileSync("dashboard.html", dashboard.html_content);
-  }
+  if (chunk.type === "delta") process.stdout.write(chunk.text);
+  if (chunk.type === "done") console.log(chunk.dashboard.title);
 }
 ```
 
-Both accept the same `source` and `options` arguments.
+Use `stream` when you want to show a live preview while the AI writes. Use `generate` when you just need the result.
 
 ---
 
