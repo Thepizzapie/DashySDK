@@ -1,6 +1,10 @@
 # @dashy/sdk
 
-Generate embeddable HTML dashboards from any data source using Claude AI.
+Generate embeddable, live-updating dashboards from any database using AI.
+
+Point the SDK at a Postgres, SQLite, or GraphQL source, describe what you want, and get back a self-contained HTML dashboard. Embed it in an iframe and push live data via postMessage — no page reload required.
+
+---
 
 ## Install
 
@@ -8,113 +12,204 @@ Generate embeddable HTML dashboards from any data source using Claude AI.
 npm install @dashy/sdk
 ```
 
-## Quick start
+Requires Node 18+. Peer deps: `react` + `react-dom` ≥ 18 (only if using the React component).
+
+---
+
+## Quick Start
 
 ```ts
-import { createSDK, MemoryDashboardStore } from "@dashy/sdk";
+import { createSDK } from "@dashy/sdk";
 
 const sdk = createSDK({
-  anthropicKey: process.env.ANTHROPIC_API_KEY!,
-  store: new MemoryDashboardStore(),
+  provider: "openai",
+  openaiKey: process.env.OPENAI_API_KEY,
 });
 
-// Generate a dashboard
 const dashboard = await sdk.generate(
-  { type: "postgres", connectionString: process.env.DATABASE_URL! },
-  { prompt: "Monthly revenue by product line", mode: "charts" }
+  { type: "postgres", connectionString: process.env.DATABASE_URL },
+  { prompt: "Monthly revenue, order count, and AOV for the past year", mode: "charts" }
 );
 
-console.log(dashboard.title);          // "Revenue by Product Line"
-console.log(dashboard.html_content);   // full HTML document
+console.log(dashboard.html_content); // self-contained HTML, ready to serve
+```
 
-// Publish to store and enable live data (5-min refresh)
+### Streaming (real-time preview)
+
+```ts
+for await (const chunk of sdk.stream(source, options)) {
+  if (chunk.type === "delta") process.stdout.write(chunk.text);
+  if (chunk.type === "done") console.log("Done:", chunk.dashboard.title);
+}
+```
+
+---
+
+## Embed in an iframe
+
+```ts
+import { prepareDoc } from "@dashy/sdk";
+
+// Wrap the raw HTML for safe iframe rendering
+const iframeHtml = prepareDoc(dashboard.html_content);
+
+// Serve iframeHtml at a route, then:
+// <iframe src="/dashboard/frame" sandbox="allow-scripts allow-same-origin"></iframe>
+```
+
+---
+
+## Live Data Injection
+
+Every generated dashboard embeds a `useDashyData(key, fallback)` hook. Push fresh rows to it from the parent page via postMessage — charts update instantly, no reload.
+
+```ts
+// 1. Find which keys the dashboard uses
+import { extractSentinelKeys } from "@dashy/sdk";
+const keys = extractSentinelKeys(dashboard.html_content);
+// e.g. ["orders"]
+
+// 2. Inject fresh rows from the parent page
+const iframe = document.getElementById("dashboard-frame") as HTMLIFrameElement;
+iframe.contentWindow!.postMessage({
+  type: "DASHY_UPDATE",
+  data: {
+    orders: await db.query("SELECT * FROM orders WHERE created_at > now() - interval '12 months'")
+  }
+}, "*");
+```
+
+> **Always send raw database rows** — the same shape as your source table. The dashboard handles aggregation (monthly rollups, bucketing, etc.) in the browser. Never pre-aggregate before injecting.
+
+---
+
+## Generation Modes
+
+| Mode | Stack | Style | Best for |
+|------|-------|-------|----------|
+| `charts` | Recharts + MUI | Dark, glassmorphic | Analytics, KPI dashboards |
+| `mui` | MUI only | Dark, structured | Data overviews, admin panels |
+| `diagram` | D3 + SVG | Academic, white | Methodology flows, statistical figures |
+
+---
+
+## Full API
+
+### `createSDK(config)`
+
+```ts
+createSDK({
+  provider?: "openai" | "anthropic"; // default: "anthropic"
+  openaiKey?: string;
+  anthropicKey?: string;
+  store?: DashboardStore;            // for publish/deploy
+})
+```
+
+---
+
+### `sdk.generate(source, options)` → `Promise<Dashboard>`
+### `sdk.stream(source, options)` → `AsyncGenerator<delta | done>`
+
+**source**
+```ts
+{ type: "postgres"; connectionString: string; sampleSize?: number }
+{ type: "sqlite";   path: string }
+{ type: "graphql";  endpoint: string; headers?: Record<string, string> }
+```
+
+**options**
+```ts
+{
+  prompt: string;
+  mode?: "charts" | "mui" | "diagram"; // default: "charts"
+  entities?: string[];    // tables to include (default: all)
+  dataLimit?: number;     // rows per entity sent to the AI (default: 200)
+  data?: Record<string, Row[]>; // pre-fetched data (skips auto-query)
+}
+```
+
+---
+
+### `sdk.introspect(source)` → `Promise<SemanticModel>`
+
+Inspect the schema before generating — useful for previewing columns, row counts, and relationships.
+
+---
+
+### `sdk.deploy(dashboard, options?)` → `Promise<Dashboard>`
+
+Enable live data and save to the configured store.
+
+```ts
+await sdk.deploy(dashboard, {
+  refreshInterval: 300,       // seconds between re-queries (default: 300)
+  sourceBindings?: string[],  // override which entity names are bound
+});
+```
+
+---
+
+### `prepareDoc(html)` → `string`
+
+Prepares raw generated HTML for iframe embedding. Injects the DASHY bootstrap (postMessage listener + `useDashyData`), strips any duplicate declarations, and removes broken chart children.
+
+---
+
+### `extractSentinelKeys(html)` → `string[]`
+
+Returns the entity key names embedded in a dashboard's sentinel markers. Use these as keys when injecting live data.
+
+---
+
+## Publish to Dashy App
+
+```ts
+import { createSDK } from "@dashy/sdk";
+import { DashyApiStore } from "@dashy/sdk/publish";
+
+const sdk = createSDK({
+  provider: "openai",
+  openaiKey: process.env.OPENAI_API_KEY,
+  store: new DashyApiStore({
+    baseUrl: process.env.DASHY_BASE_URL,
+    token: process.env.DASHY_SDK_KEY,
+  }),
+});
+
+const dashboard = await sdk.generate(source, options);
 await sdk.deploy(dashboard, { refreshInterval: 300 });
+// Now live at your Dashy instance
 ```
 
-## Data sources
+Get a `DASHY_SDK_KEY` from **Settings → API Keys** in the Dashy app.
 
-### PostgreSQL
+---
+
+## Express Middleware
+
+Serve dashboards directly from an Express app:
 
 ```ts
-{ type: "postgres", connectionString: "postgresql://...", include: ["orders", "products"] }
+import { reportMiddleware } from "@dashy/sdk/server";
+
+app.use("/reports", reportMiddleware({ sdk, store }));
+// GET /reports/:id       → renders the dashboard
+// POST /reports/generate → generates + returns dashboard JSON
 ```
 
-### GraphQL
+---
 
-```ts
-{ type: "graphql", endpoint: "https://api.example.com/graphql", headers: { Authorization: "Bearer ..." } }
-```
+## Data Sources
 
-### Inline (pre-built model)
+| Source | Package | Notes |
+|--------|---------|-------|
+| PostgreSQL | `pg` (bundled) | Full schema introspection, FK detection |
+| SQLite | `better-sqlite3` (bundled) | Local files |
+| GraphQL | `graphql` (bundled) | Introspects via introspection query |
 
-```ts
-{ type: "inline", model: mySemanticModel }
-```
+---
 
-## Dashboard modes
+## License
 
-| Mode | Description |
-|------|-------------|
-| `charts` | Multi-chart analytics dashboard (Recharts) |
-| `mui` | Material UI data-rich layout with tables and KPIs |
-| `html` | Plain HTML document — no React, fully portable |
-| `infographic` | Visual one-pager — big numbers, progress bars |
-| `diagram` | D3/SVG entity relationship or flow diagram |
-
-## Streaming generation
-
-```ts
-for await (const event of sdk.stream(source, options)) {
-  if (event.type === "delta") process.stdout.write(event.text);
-  if (event.type === "done") console.log("Done:", event.dashboard.title);
-}
-```
-
-## Introspect schema first
-
-```ts
-const model = await sdk.introspect({ type: "postgres", connectionString: "..." });
-console.log(model.entities.map(e => e.name));
-```
-
-## Generate from a pre-built model
-
-```ts
-const dashboard = await sdk.generateFromModel(model, { prompt: "...", mode: "charts" }, queryData);
-```
-
-## Express middleware
-
-```ts
-import express from "express";
-import { createSDK, MemoryDashboardStore, reportMiddleware } from "@dashy/sdk";
-
-const store = new MemoryDashboardStore();
-const sdk = createSDK({ anthropicKey: "...", store });
-
-const app = express();
-app.use("/reports", reportMiddleware({ store }));
-```
-
-## Custom store
-
-Implement `DashboardStore` to persist dashboards in your own database:
-
-```ts
-import type { DashboardStore, Dashboard } from "@dashy/sdk";
-
-class MyDbStore implements DashboardStore {
-  async save(dashboard: Dashboard) { await db.upsert(dashboard); }
-  async get(id: string) { return db.findById(id); }
-  async list() { return db.findAll(); }
-  async delete(id: string) { await db.delete(id); }
-}
-
-const sdk = createSDK({ anthropicKey: "...", store: new MyDbStore() });
-```
-
-## OpenAI provider
-
-```ts
-const sdk = createSDK({ provider: "openai", openaiKey: process.env.OPENAI_API_KEY! });
-```
+MIT
