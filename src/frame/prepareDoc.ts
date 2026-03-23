@@ -167,7 +167,11 @@ const { Box, Stack, Grid, Typography, Card, CardContent, Chip, LinearProgress,
   MenuItem, FormControl, InputLabel, Slider, Rating, Accordion, AccordionSummary,
   AccordionDetails, List, ListItem, ListItemText, ListItemIcon, ListItemButton,
   Drawer, AppBar, Toolbar, Menu, Snackbar, Dialog, DialogTitle, DialogContent,
-  DialogActions, CardHeader, CardActions, AvatarGroup, ButtonBase, alpha } = MaterialUI;
+  DialogActions, CardHeader, CardActions, AvatarGroup, ButtonBase, alpha,
+  TextField, InputAdornment, OutlinedInput, FilledInput, InputBase,
+  Autocomplete, Pagination, Stepper, Step, StepLabel, StepContent,
+  Fab, BottomNavigation, BottomNavigationAction,
+  SpeedDial, SpeedDialAction, SpeedDialIcon } = MaterialUI;
 ${code}
 const __exports = ${exportsChain};
 if (__exports) ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(__exports));
