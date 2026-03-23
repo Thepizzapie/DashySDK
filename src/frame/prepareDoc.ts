@@ -48,6 +48,67 @@ function fixJsxSyntax(code: string): string {
   return code;
 }
 
+/**
+ * Attempt to recover truncated JSX by closing any open tags and ensuring
+ * the component function has a valid return statement and render call.
+ * This is a best-effort heuristic — it won't fix all cases.
+ */
+function recoverTruncatedJSX(code: string): string {
+  const lines = code.split('\n');
+
+  // Remove incomplete trailing lines (no proper JSX close)
+  let endLine = lines.length - 1;
+  while (endLine > 0) {
+    const trimmed = lines[endLine].trimEnd();
+    if (
+      trimmed.endsWith('/>') || trimmed.endsWith('>') ||
+      trimmed.endsWith('}') || trimmed.endsWith(');') ||
+      trimmed.endsWith(',') || trimmed === ''
+    ) break;
+    endLine--;
+  }
+  const safeLines = lines.slice(0, endLine + 1);
+  const safeCode = safeLines.join('\n');
+
+  // Build a simple JSX open/close tag stack to find unclosed elements
+  // Only scan code from the last `return (` onward to avoid false positives
+  const returnIdx = safeCode.lastIndexOf('return (');
+  if (returnIdx === -1) return safeCode; // can't recover without a return
+
+  const jsxBody = safeCode.slice(returnIdx + 'return ('.length);
+  const stack: string[] = [];
+  const tagRe = /<(\/?)([A-Z][A-Za-z0-9.]*|[a-z][a-z0-9-]*)(?:\s[^>]*)?(\/?)>/g;
+  let m: RegExpExecArray | null;
+  while ((m = tagRe.exec(jsxBody)) !== null) {
+    const isClose = m[1] === '/';
+    const tagName = m[2];
+    const isSelfClose = m[3] === '/';
+    if (isSelfClose) continue;
+    if (isClose) {
+      if (stack.length > 0 && stack[stack.length - 1] === tagName) stack.pop();
+    } else {
+      stack.push(tagName);
+    }
+  }
+
+  // Build closing tags for anything still on the stack
+  let closing = '';
+  while (stack.length > 0) closing += `\n  </${stack.pop()}>`;
+
+  // Close the return statement and any open function braces
+  // Count unmatched `{` vs `}` in safeCode
+  let braceDepth = 0;
+  for (const ch of safeCode) {
+    if (ch === '{') braceDepth++;
+    else if (ch === '}') braceDepth--;
+  }
+
+  let tail = closing + '\n  );\n'; // close return (
+  while (braceDepth > 0) { tail += '}\n'; braceDepth--; }
+
+  return safeCode + tail;
+}
+
 export function prepareDoc(html: string): string {
   if (!html) return "";
 
@@ -55,16 +116,35 @@ export function prepareDoc(html: string): string {
 
   // Full HTML doc with text/babel → extract component, re-wrap with complete globals
   if (isFullDoc && /type=["']text\/babel["']/i.test(html)) {
-    const m = html.match(/<script[^>]*type=["']text\/babel["'][^>]*>([\s\S]*?)<\/script>/i);
-    if (m) {
-      let code = m[1]
+    // Try strict match first (requires closing </script>)
+    let babelContent: string | null = null;
+    const strictMatch = html.match(/<script[^>]*type=["']text\/babel["'][^>]*>([\s\S]*?)<\/script>/i);
+    if (strictMatch) {
+      babelContent = strictMatch[1];
+    } else {
+      // HTML truncated before closing </script> — extract everything after the opening tag
+      const openTagMatch = html.match(/<script[^>]*type=["']text\/babel["'][^>]*>/i);
+      if (openTagMatch) {
+        const startIdx = html.indexOf(openTagMatch[0]) + openTagMatch[0].length;
+        babelContent = html.slice(startIdx);
+      }
+    }
+
+    if (babelContent !== null) {
+      let code = babelContent
         .replace(/const\s*\{[^{}]*\}\s*=\s*React\s*;/gs, "")
         .replace(/const\s*\{[^{}]*\}\s*=\s*Recharts\s*;/gs, "")
         .replace(/const\s*\{[^{}]*\}\s*=\s*MaterialUI\s*;/gs, "")
         .replace(/const\s+root\s*=\s*ReactDOM\.createRoot[\s\S]*?root\.render[\s\S]*?;/g, "")
         .replace(/ReactDOM\.createRoot[\s\S]*?\.render[\s\S]*?;/g, "")
         .replace(/^export\s+default\s+/m, "const __DefaultExport = ");
-        const cleaned = fixJsxSyntax(stripUseDashyData(code));
+
+      // If the code was truncated (no render call), attempt JSX recovery
+      if (!strictMatch) {
+        code = recoverTruncatedJSX(code);
+      }
+
+      const cleaned = fixJsxSyntax(stripUseDashyData(code));
       return buildTemplate(cleaned, findRootComponents(cleaned));
     }
   }

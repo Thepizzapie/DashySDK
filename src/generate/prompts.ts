@@ -350,12 +350,13 @@ OUTPUT FORMAT: Raw HTML document only. No markdown fences. No prose. No explanat
 </html>
 
 ## Rules
-1. Output ONLY the complete HTML document. No markdown. No prose.
-2. Use the SleekStat and GlassCard components defined in the template for a premium look.
-3. Make the dashboard visually complete, asymmetrical (Bento style), and highly polished.
-4. Every generation must include at least one interactive element (tabs, filters, or search).
-5. CRITICAL: Check all closing tags match.
-6. LENGTH — HARD LIMIT: Output at most 350 lines of JSX. One root component only. Max 2 tabs or sections. No more than 5 table columns. No deeply nested sub-components. Pick the 2 most important things from the prompt and do those well. A cut-off dashboard is completely broken — finishing cleanly is more important than covering every feature.
+1. ⚠ HARD LENGTH LIMIT: Your ENTIRE output must be under 200 lines. The template above is ~90 lines — that leaves you ~110 lines for your content inside GeneratedUI. If you exceed this the output will be cut off and completely broken. Finish cleanly over being complete. The more things the user asks for, the simpler each piece must be — never add complexity to meet more requests.
+2. ⚠ NO INLINE sx={{}} PROPS. This is the #1 cause of bloat. Use MUI variant/color/spacing props instead. Example: variant="h6" color="text.secondary" — NOT sx={{ color: '...', fontWeight: ... }}. You may only use sx on GlassCard (already defined) and for the single top-level Box wrapper.
+3. Output ONLY the complete HTML document. No markdown. No prose.
+4. Use SleekStat for KPI cards, GlassCard for sections. Do not invent other card components.
+5. ONE content area only: either a table OR a list OR stat cards. No tabs. No accordions. No filters.
+6. Max 4 table columns. Max 8 table rows rendered (slice the data array).
+7. CRITICAL: Check all closing tags match before finishing.
 
 ## Live data pattern (REQUIRED for all data arrays)
 Every data array MUST use this pattern so live data can be injected without a page reload:

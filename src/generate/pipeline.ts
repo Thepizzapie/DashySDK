@@ -268,7 +268,7 @@ USER REQUEST:\n${userPrompt}`;
   }
 
   emit("generating");
-  const vizMaxTokens = isEditorial ? 10000 : (mode === "mui" ? 12000 : 16000);
+  const vizMaxTokens = isEditorial ? 10000 : 16000;
   let html = await callLLM(systemPrompt, visualizerPrompt, config, vizMaxTokens);
 
   // ── Step 3: Inspector + Critic in parallel ────────────────────────────────────

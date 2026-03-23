@@ -26,7 +26,7 @@ let result: any;
 let deltas = 0;
 
 for await (const chunk of sdk.stream(source, {
-  prompt: "Customer overview: total customers, new vs returning, top customers by spend, recent orders table.",
+  prompt: "Revenue overview dashboard: total revenue, order count, average order value as KPIs, plus a table of the top customers by spend.",
   mode: "mui",
   entities: ["orders", "customers"],
   dataLimit: 50,

@@ -175,6 +175,92 @@ Use `generate` when output quality matters. Use `stream` when you want live prev
 
 ---
 
+## Exposing Dashboard Generation to End Users
+
+If you want your own users to generate and view dashboards — not just you — wrap the SDK in a backend API. Users never touch the SDK, LLM keys, or database connections directly.
+
+### The Pattern
+
+```
+User browser  →  POST /api/dashboards  (authed)  →  SDK (server-side)  →  stored HTML in DB
+User browser  →  <iframe src="/api/dashboards/:id/frame">  →  DB lookup  →  prepareDoc HTML
+User browser  →  fetch your data  →  postMessage to iframe  →  charts update
+```
+
+### 1. Generation endpoint
+
+```ts
+// POST /api/dashboards
+// Body: { prompt: string, mode?: string }
+app.post("/api/dashboards", requireAuth, rateLimitPerUser, async (req, res) => {
+  const { prompt, mode = "charts" } = req.body;
+
+  const dashboard = await sdk.generate(
+    { type: "postgres", connectionString: process.env.DATABASE_URL }, // your DB, not the user's
+    { prompt, mode }
+  );
+
+  const id = crypto.randomUUID();
+  await db.dashboards.insert({ id, userId: req.user.id, html: dashboard.html_content });
+
+  res.json({ id });
+});
+```
+
+Key rules:
+- **Rate limit this route** — each call makes multiple LLM requests and costs money
+- **Use your own DB connection** — never accept a connection string from the client
+- **Validate `prompt`** before passing to the SDK
+
+### 2. Frame serving endpoint
+
+```ts
+// GET /api/dashboards/:id/frame
+app.get("/api/dashboards/:id/frame", requireAuth, async (req, res) => {
+  const row = await db.dashboards.findOne({ id: req.params.id, userId: req.user.id });
+  if (!row) return res.status(404).end();
+
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  res.send(prepareDoc(row.html));
+});
+```
+
+### 3. Frontend
+
+```tsx
+// After calling POST /api/dashboards and getting back { id }
+const [dashboardId, setDashboardId] = useState<string | null>(null);
+const iframeRef = useRef<HTMLIFrameElement>(null);
+
+// Push live data whenever your data changes
+useEffect(() => {
+  const rows = await fetch("/api/orders/recent").then(r => r.json());
+  iframeRef.current?.contentWindow?.postMessage(
+    { type: "DASHY_UPDATE", data: { orders: rows } },
+    "*"
+  );
+}, [liveData]);
+
+return dashboardId ? (
+  <iframe
+    ref={iframeRef}
+    src={`/api/dashboards/${dashboardId}/frame`}
+    sandbox="allow-scripts allow-same-origin"
+    style={{ width: "100%", height: 600, border: "none" }}
+  />
+) : null;
+```
+
+### Hosting options
+
+| Option | How | Best for |
+|--------|-----|----------|
+| **Self-hosted** | Store HTML in your DB, serve from your API | Full control, any stack |
+| **Dashy backend** | `DashyApiStore` + `sdk.deploy()` | Managed hosting, CDN, auto-refresh |
+| **Blob storage** | Write `prepareDoc(html)` to S3/R2, serve from CDN | Static/read-heavy dashboards |
+
+---
+
 ## Publish to the Dashy App
 
 If you're using the Dashy app as a backend, get an SDK key from **Settings → API Keys**, then:
